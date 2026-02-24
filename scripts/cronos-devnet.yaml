@@ -1,6 +1,6 @@
 dotenv: .env
 cronos_777-1:
-  cmd: cronosd
+  cmd: genesisd
   start-flags: "--trace"
   app-config:
     minimum-gas-prices: 0basetcro

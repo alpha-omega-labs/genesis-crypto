@@ -8,7 +8,7 @@ TMPD=$(mktemp -d)
 tar xfz $1 -C $TMPD
 
 echo "Codesign"
-find $TMPD -type f \( -name "*.dylib" -or -name cronosd \) | xargs -I{} codesign --force --options runtime -v -s "$MAC_CODE_API_DEVELOPER_ID" {}
+find $TMPD -type f \( -name "*.dylib" -or -name genesisd \) | xargs -I{} codesign --force --options runtime -v -s "$MAC_CODE_API_DEVELOPER_ID" {}
 
 echo "Archive"
 WORKDIR=$PWD

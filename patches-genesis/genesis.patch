@@ -1,0 +1,3291 @@
+diff --git a/Makefile b/Makefile
+index 998801b2..d335b90e 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,7 @@
+ BUILDDIR ?= $(CURDIR)/build
+ PACKAGES=$(shell go list ./... | grep -v '/simulation')
+ COVERAGE ?= coverage.txt
++BINARY_NAME = genesisd
+ 
+ GOPATH ?= $(shell $(GO) env GOPATH)
+ BINDIR ?= ~/go/bin
+@@ -90,8 +91,8 @@ comma := ,
+ build_tags_comma_sep := $(subst $(whitespace),$(comma),$(build_tags))
+ 
+ # process linker flags
+-ldflags += -X github.com/cosmos/cosmos-sdk/version.Name=cronos \
+-	-X github.com/cosmos/cosmos-sdk/version.AppName=cronosd \
++ldflags += -X github.com/cosmos/cosmos-sdk/version.Name=genesis \
++	-X github.com/cosmos/cosmos-sdk/version.AppName=$(BINARY_NAME) \
+ 	-X github.com/cosmos/cosmos-sdk/version.Version=$(VERSION) \
+ 	-X github.com/cosmos/cosmos-sdk/version.Commit=$(COMMIT) \
+ 	-X github.com/cosmos/cosmos-sdk/version.BuildTags=$(build_tags_comma_sep)
+@@ -104,10 +105,10 @@ endif
+ 
+ all: build
+ build: check-network print-ledger go.sum
+-	@go build -mod=readonly $(BUILD_FLAGS) -o $(BUILDDIR)/cronosd ./cmd/cronosd
++	@go build -mod=readonly $(BUILD_FLAGS) -o $(BUILDDIR)/$(BINARY_NAME) ./cmd/cronosd
+ 
+ install: check-network print-ledger go.sum
+-	@go install -mod=readonly $(BUILD_FLAGS) ./cmd/cronosd
++	@go build -mod=readonly $(BUILD_FLAGS)  -o $${GOBIN:-$$(go env GOPATH)/bin}/$(BINARY_NAME) ./cmd/cronosd
+ 
+ test: test-memiavl test-store
+ 	@go test -tags=objstore -v -mod=readonly $(PACKAGES) -coverprofile=$(COVERAGE) -covermode=atomic
+@@ -198,8 +199,8 @@ test-sim-after-import: runsim
+ test-sim-custom-genesis-multi-seed: export GOFLAGS=-tags=objstore
+ test-sim-custom-genesis-multi-seed: runsim
+ 	@echo "Running multi-seed custom genesis simulation..."
+-	@echo "By default, ${HOME}/.cronosd/config/genesis.json will be used."
+-	@$(BINDIR)/runsim -Genesis=${HOME}/.cronosd/config/genesis.json -SimAppPkg=$(SIMAPP) -ExitOnFail 400 5 TestFullAppSimulation
++	@echo "By default, ${HOME}/.$(BINARY_NAME)/config/genesis.json will be used."
++	@$(BINDIR)/runsim -Genesis=${HOME}/.$(BINARY_NAME)/config/genesis.json -SimAppPkg=$(SIMAPP) -ExitOnFail 400 5 TestFullAppSimulation
+ 
+ test-sim-multi-seed-long: export GOFLAGS=-tags=objstore
+ test-sim-multi-seed-long: runsim
+diff --git a/README.md b/README.md
+index a71eb126..06552b3e 100644
+--- a/README.md
++++ b/README.md
+@@ -1,173 +1,456 @@
+-<!--
+-parent:
+-  order: false
+--->
++<h1 align="center">
++  GenesisL1 Mainnet (Cronos fork)
++</h1>
+ 
++<p align="center">
++  <ins>Release <b>v1.0.0</b> ~ Cronos <b>v1.0.15</b></ins>
++</p>
++
++<p align="center">
++  <img src="https://avatars.githubusercontent.com/u/88520218" alt="GenesisL1" width="150" height="150"/>
++</p>
+ 
+-<div align="center">
+-  <h1> <img src="./assets/cronos.svg" alt="Cronos Logo" width="300px" /> </h1>
+-</div>
+-<br />
++<p align="center">
++  Chain ID <b>genesis_29-2</b>
++</p>
++
++<p align="center">
++   A source code fork of <b>Cronos</b> and <b>Ethermint</b>
++</p>
+ 
+ <p align="center">
+-  <a href="https://github.com/crypto-org-chain/cronos/actions/workflows/build.yml"><img label="Build Status" src="https://github.com/crypto-org-chain/cronos/actions/workflows/build.yml/badge.svg" /></a>
+-  <a href="https://codecov.io/gh/crypto-org-chain/cronos"><img label="Code Coverage" src="https://codecov.io/gh/crypto-org-chain/cronos/branch/main/graph/badge.svg" /></a>
+-  <a href="https://discord.gg/pahqHz26q4"><img label="Discord" src="https://img.shields.io/discord/783264383978569728.svg?color=7289da&label=Cronos&logo=discord&style=flat-square" /></a>
++  Cosmos SDK <b>v0.46.15</b>
+ </p>
+ 
+-## Table of Contents
++---
++
++## 🧭 Introduction
++
++Due to the recent on-chain minting of the full Protein Data Bank (PDB), the size of the GenesisL1 blockchain has increased significantly. This data-heavy event resulted in a substantial boost to storage requirements and syncing time. To address this, the GenesisL1 community provides multiple streamlined methods to get a node up and running quickly — including a bootstrapped `data` folder backup that allows syncing within hours instead of several days.
++
++> ⚠️ **IMPORTANT:**
++> In **Step 2**, you will need to choose **one setup method**: Option A, B, or C. Only follow **one** of these — copying all three will cause your setup to fail.
++
++This repository is intended for those who want to join the Cronos-fork **mainnet**: `genesis_29-2`, using one of the following paths:
++
++### 🔹 OPTION A: Bootstrapped Snapshot (Fastest Setup)
++Use a fully synced 622GB `data` folder provided by the community, compressed to ~543GB.
++
++### 🔹 OPTION B: State Sync Setup (Recommended for New Nodes)
++Sync your node from a trusted block height using the built-in **state sync** mechanism.
++
++### 🔹 OPTION C: Upgrade Existing Node
++Migrate from the legacy Evmos-based network `genesis-ethermint` to the current Cronos-fork chain.
++
++> [!WARNING]
++> ⚠️ **Legacy Node Warning:**
++> 
++> We were an Evmos-fork before deciding to hard fork to Cronos. If you're attempting a full-node sync from scratch, follow the instructions in the [`genesis-ethermint`](https://github.com/GenesisL1/genesis-ethermint) repository first.
++
++
++---
++
++## 1. ⚙️ System Requirements
++
++### Hardware
++
++- **Disk**: 1000GB+ (NVMe M.2 SSD recommended)  
++- **RAM**: 8GB+ (16GB+ recommended)  
++- **CPU**: 4+ physical CPU cores | 8+ threads  
++- **Network**: > 100Mbit/s stable connection bothways 
++
++### Software Setup
++
++Debian based OS
++
++```bash
++sudo apt update && sudo apt upgrade -y
++sudo apt install curl tar wget build-essential git make gcc liblz4-tool htop unzip -y
++```
++
++### 💡 Enable Swap (Optional but Recommended)
++
++```bash
++sudo fallocate -l 8G /swapfile
++sudo chmod 600 /swapfile
++sudo mkswap /swapfile
++sudo swapon /swapfile
++```
++
++To persist:
++
++```bash
++sudo cp /etc/fstab /etc/fstab.bak
++echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
++```
++
++---
++
++## 2. 🛠️ Node Setup Options
++
++> [!IMPORTANT]
++> Choose **one** method and expand the '>' :
++
++### 🔹 A. Bootstrap with Provided Snapshot (Fastest; Trustfull)
++
++<details>
++<summary> Quick-Sync from provided `data` backup </summary>
++
++```bash
++cd ~
++wget https://ftp.basementnodes.ca/genesis_backup_20250407082420.tar.lz4
++```
++
++If this one is currently unavailable try the following
++
++```bash
++cd ~
++wget http://85.122.195.176:55865/genesis_backup_20250505.tar.gz
++```
++
++let the download finish and grab a coffee. 
++
++setup the github repo.
++
++```bash
++git clone https://github.com/JoMfN/genesis-crypto.git
++cd genesis-crypto
++```
++
++create a `.genesis` folder with your config in the meanwhile.
++
++```bash
++sh setup/quick-sync.sh <moniker>
++```
++
++Follow the instructions in the terminal.
++
++check if a .genesis folder was generated.
++
++unzip the fully downloaded `data` folder 
++
++```bash
++lz4 -d genesis_backup_20250407082420.tar.lz4 | tar -xvf -
++```
++
++If you downloaded the .tar.gz file instead:
++
++```bash
++tar -xvzf genesis_backup_20250505.tar.gz
++```
++
++replace it with the one existing in `~/.genesis/data`
++
++```bash
++mv genesis_backup_20250407082420/* ~/.genesis/
++```
++
++If you downloaded the .tar.gz file instead:
++
++```bash
++mv genesis_backup_20250505/* ~/.genesis/
++```
++
++> ⚠️ Ensure `genesisd` is not running before replacing `.genesis`
++
++</details>
++
++### 🔹 B. State Sync from Recent Height (Trusted)
++
++<details>
++<summary> Setup a node _(using state sync)_ from a snapshot </summary>
++
++```bash
++git clone https://github.com/GenesisL1/genesis-crypto.git
++cd genesis-crypto
++git checkout v1.0.0
++```
++
++> [!IMPORTANT]
++> Running this will **wipe the entire database** (the _/data_-folder **excluding** the priv_validator_state.json file). Therefore if you already have a node set up and you prefer not to have your GenesisL1 database lost, create a backup.
++>
++> You could use [utils/backup/create.sh](/utils/backup/create.sh) for this.
++>
+ 
+-- [Table of Contents](#table-of-contents)
+-- [1. Description](#1-description)
+-- [2. Contributing](#2-contributing)
+-- [3. License](#3-license)
+-- [4. Documentation](#4-documentation)
+-- [5. Build full node](#5-build-full-node)
+-- [6. Start a local Development Network and Node](#6-start-a-local-development-network-and-node)
+-- [7. Send Your First Transaction](#7-send-your-first-transaction)
+-- [8. Testing](#8-testing)
+-- [9. Pystarport Quick Start](#9-pystarport-quick-start)
+-  - [install latest python (for linux)](#install-latest-python-for-linux)
+-  - [set path (for linux or for mac)](#set-path-for-linux-or-for-mac)
+-  - [install pystarport](#install-pystarport)
+-  - [quick start](#quick-start)
+-  - [get status](#get-status)
+-  - [stop all](#stop-all)
+-- [10. Useful links](#10-useful-links)
++```bash
++sh setup/state-sync.sh <moniker>
++```
+ 
+-<a id="description" />
++> 💡 This method will auto-install `genesisd` and dependencies
+ 
+-## 1. Description
++</details>
+ 
+-**Cronos** is the Crypto.org EVM chain that aims to massively scale the DeFi ecosystem.
+ 
+-<a id="contributing" />
++### 🔹 C. Upgrade from `genesis-ethermint` (Trustless)
+ 
+-## 2. Contributing
++<details>
++<summary>⚙️ Upgrade an ethermint Node synced from scratch </summary>
+ 
+-Please abide by the [Code of Conduct](CODE_OF_CONDUCT.md) in all interactions,
+-and the [contributing guidelines](CONTRIBUTING.md) when submitting code.
++> ⚠️ **Legacy Node Warning:**
++> If you're attempting a full-node sync from scratch, follow the instructions in the  (repo: [`genesis-ethermint`](https://github.com/GenesisL1/genesis-ethermint)) and the node synced till height: `7400000` which caused it to panic.
++>
+ 
+-<a id="license" />
++Then to upgrade to the new **mainnet** (`genesis_29-2`):
+ 
+-## 3. License
++```bash
++sh setup/upgrade.sh
++```
+ 
+-[Apache 2.0](./LICENSE)
++</details>
+ 
+-<a id="documentation" />
++---
+ 
+-## 4. Documentation
++## 3. Daemon check
+ 
+-[Technical documentation](http://cronos.org/docs).
++If you can't access the `genesisd` command at this point, then you may need to execute:
+ 
+-<a id="build" />
++```bash
++. ~/.bashrc
++```
++> Or the equivalent: `source ~/.bashrc`
+ 
+-## 5. Build full node
++Try if now if you can initiate the node
+ 
+ ```bash
+-# COSMOS_BUILD_OPTIONS=rocksdb make install
+-make build
++genesisd start --log_level warn
+ ```
+ 
+-<a id="start-local-full-node" />
++> Confirm everything initializes correctly, then stop it (Ctrl + C).
+ 
+-## 6. Start a local Development Network and Node
++(Stop with Ctrl + C after confirmation)
+ 
+-Please follow this [documentation](https://cronos.org/docs/getting-started/local-devnet.html#devnet-running-latest-development-node) to run a local devnet.
++<details>
++<summary>⚙️ getting errors with helper script Go Installation (ignore if no error above)</summary>
+ 
+-<a id="send-first-transaction" />
++**For AMD:**
+ 
+-## 7. Send Your First Transaction
++```bash
++ver="1.22.12"
++wget "https://golang.org/dl/go$ver.linux-amd64.tar.gz"
++sudo rm -rf /usr/local/go
++sudo tar -C /usr/local -xzf "go$ver.linux-amd64.tar.gz"
++rm "go$ver.linux-amd64.tar.gz"
++echo "export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin" >> $HOME/.bash_profile
++source $HOME/.bash_profile
++go version
++```
+ 
+-After setting the local devnet, you may interact with the your local blockchain by following this [documentation](https://cronos.org/docs/getting-started/local-devnet.html#interact-with-the-chain).
++**For ARM (Raspberry Pi 5):**
+ 
+-<a id="testing" />
++```bash
++wget https://go.dev/dl/go1.22.12.linux-arm64.tar.gz 
++sudo rm -rf /usr/local/go
++sudo tar -C /usr/local -xzf "go1.22.12.linux-arm64.tar.gz"
++rm "go1.22.12.linux-arm64.tar.gz"
++echo "export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin" >> $HOME/.bash_profile
++source $HOME/.bash_profile
++go version
++```
+ 
+-## 8. Testing
++</details>
+ 
+-There are different tests that can be executed in the following ways:
++---
+ 
+-- unit tests: `make test`
+-- [integration tests](./docs/integration-test.md)
++## 4. Create or import a key (optional for just a node, required for validator node)
+ 
+-### CI Testing
+-we use `Nix` as our CI testing environment and use `gomod2nix` to convert go modules into nix packages.
+-Therefore, to install `gomod2nix` is required:
++A key is necessary to interact with the network/node. If you haven't already created one, either import one or generate a new one, using:
++
++replace `<walletname>` with an arbitrary name for your wallet key
++
++```bash
++sh utils/key/create.sh <walletname>
+ ```
+-go install github.com/nix-community/gomod2nix@latest
++
++OR
++
++```bash
++sh utils/key/create.sh <walletname> <private_eth_key>
+ ```
+-And then, you can run:
++
++> _<private_eth_key>_ is the private key for a (wallet) address you already own (not recommended).
++
++> [!TIP]
++> 💡 **TIP:** Clear bash history:  
++> `history -c && exec bash`
++>
++
++> [!NOTE]
++> Transfer some L1 to the wallet you just created
++>
++
++to check your keys:
++
++```bash
++genesisd keys list
++```
++
++To check wallet balance:
++
++```bash
++genesisd query bank balances $(genesisd keys show <walletname> -a)
++```
++
++
++<details>
++<summary>🔐 Pro Key Management</summary>
++
++Creating a new wallet (write down you seed phrase with pen and paper!)
++
++```bash
++genesisd keys add <walletname>
+ ```
+-gomod2nix generate
++
++OR
++
++Recover a wallet:
++
++```bash
++genesisd keys add <walletname> --recover
+ ```
+-to update `gomod2nix.toml` if any go package has changed.
+ 
+-<a id="pystarport" />
++The terminal will request you to input the 24-words long seed phrase
+ 
+-## 9. Pystarport Quick Start
++</details>
+ 
+-you can install pystarport to manage nodes for development.
++---
+ 
+-### install latest python (for linux)
++## 5 installing genesisd as a service (optional)
+ 
+-python version should be 3.8 or above.
+-you can install python like this.
++In general you can always start the node just once, and have to keep track of this terminal window by prompting: 
+ 
++```bash
++genesisd start --log_level warn
+ ```
+-git clone git@github.com:python/cpython.git
+-cd cpython
+-git checkout tags/v3.9.5
+-./configure
+-make
+-sudo make install
++
++This can be automized by installing it as a service checkout the details below.
++
++
++<details>
++<summary>🖥️ Systemd Service Setup</summary>
++
++```bash
++sudo nano /etc/systemd/system/genesisd.service
+ ```
+ 
+-### set path (for linux or for mac)
+-in some cases, if there are multiple python versions, pystarport cannot be found.
+-then adjust python path.
+-also `$HOME/.local/bin` should be included to the PATH.
++Paste this:
+ 
+ ```
+-export PATH=/usr/local/bin:$HOME/.local/bin:$PATH
++[Unit]
++Description=genesisd
++After=network-online.target
++
++[Service]
++User=$USER
++ExecStart=$(which genesisd) start
++Restart=on-failure
++RestartSec=15
++LimitNOFILE=65535
++
++[Install]
++WantedBy=multi-user.target
+ ```
+ 
+-### install pystarport
++Start it:
+ 
++```bash
++sudo systemctl start genesisd
+ ```
+-python3 -m pip install pystarport
++
++check hidden genesisd output
++
++```bash
++journalctl -fu genesisd -ocat
+ ```
+ 
+-### quick start
++</details>
++
++---
+ 
+-run two nodes devnet
++## 6. Become a validator (optional, also very welcoming)
+ 
++> [!Warning]
++> make sure you are in sync and `genesisd` is running
++
++```bash
++genesisd status
+ ```
+-pystarport serve --config ./scripts/cronos-devnet.yaml
++
++should show `"catching_up":false`
++
++```json
++"catching_up": false
+ ```
+ 
+-### get status
++Once your node is _up-and-running_, _fully synced_ and you have a _key_ created or imported, you could become a validator using:
+ 
+ ```
+-pystarport supervisorctl status
++sh setup/create-validator.sh <moniker> <walletname>
+ ```
+ 
+-### stop all
++> This is a wizard and shall prompt the user only the required fields to create an on-chain validator.
++
+ 
++<details>
++<summary>⚙️ Pro Validator Setup</summary>
++
++Watch the sync status by opening a new terminal and prompt `genesisd status` again. When you are in sync this appears:
++
++```json
++"catching_up": false
+ ```
+-pystarport supervisorctl stop all
++
++Adjust gas-prices and gas if the transaction gives the error out-of-gas
++
++```bash
++genesisd tx staking create-validator \
++  --amount=1000000el1 \
++  --pubkey=$(genesisd tendermint show-validator) \
++  --moniker="YOUR_NODE_NAME" \
++  --identity="More_Info_You_Want_To_Add" \
++  --website="" \
++  --details="Example: Community Valoper node and Supporter of GenesisL1" \
++  --security-contact="YourEmail@mail.com" \
++  --chain-id="genesis_29-2" \
++  --commission-rate="0.05" \
++  --commission-max-rate="0.20" \
++  --commission-max-change-rate="0.01" \
++  --min-self-delegation="1" \
++  --gas=355172 \
++  --gas-prices=1127530424125el1 \
++  --from=<walletname> \
+ ```
+ 
++</details>
++
++---
++
++## 7. Explore utilities
++
++> [!TIP]
++> The [/utils](/utils)-folder contains useful utilities one could use to manage their node (e.g. for fetching latest seeds and peers, fetching the genesis state, quickly shifting your config's ports, recalibrating your state sync etc.). To learn more about these, see the [README](utils/README.md) in the folder.
++
+ ---
+ 
+-<a id="useful-links" />
++### 7.1 FAQ and useful links
++
++FAQ -> Welcome for suggestions
++
++Useful links presented below 
++
++> [!TIP]
++> 
++> [`Checking status of your validator node at ping.pub`](https://ping.pub/genesisL1/uptime)
++>
++> [`MolNFT App`](https://app.molnft.org/)
++>
++> [`Anode team node installation guide`](https://anode.team/GenesisL1)
++>
++> [`starv-team node installation guide`](https://stavr-team.gitbook.io/nodes-guides/mainnets/genesisl1/node-installation)
++>
++
++## 8. Acknowledgements
+ 
+-## 10. Useful links
++Special thanks to the contributors who made this bootstrap flow possible:
+ 
+-- [Project Website](http://cronos.org/)
+-- [Technical Documentation](http://cronos.org/docs)
+-- Community chatrooms (non-technical): [Discord](https://discord.gg/nsp9JTC) [Telegram](https://t.me/CryptoComOfficial)
+-- Developer community channel (technical): [![Support Server](https://img.shields.io/discord/783264383978569728.svg?color=7289da&label=Cronos&logo=discord&style=flat-square)](https://discord.gg/pahqHz26q4)
+-- [Ethermint](https://github.com/evmos/ethermint) by Tharsis
+-- [Cosmos SDK documentation](https://docs.cosmos.network)
+-- [Cosmos Discord](https://discord.gg/W8trcGV)
+-- [Pystarport](https://github.com/crypto-com/pystarport/blob/main/README.md)
++- [@Zenodeapp](https://github.com/Zenodeapp) — for reviewing these instructions and optimizing the required scripting.
++- [@Cordtus](https://github.com/Cordtus) — for hosting and maintaining the FTP server for snapshot distribution.
+diff --git a/app/app.go b/app/app.go
+index c5387bba..2b504f5b 100644
+--- a/app/app.go
++++ b/app/app.go
+@@ -95,6 +95,7 @@ import (
+ 	"cosmossdk.io/x/upgrade"
+ 	upgradekeeper "cosmossdk.io/x/upgrade/keeper"
+ 	upgradetypes "cosmossdk.io/x/upgrade/types"
++	sdkmath "cosmossdk.io/math"
+ 
+ 	"github.com/cosmos/cosmos-sdk/baseapp"
+ 	"github.com/cosmos/cosmos-sdk/client"
+@@ -164,7 +165,7 @@ import (
+ )
+ 
+ const (
+-	Name = "cronos"
++	Name = "genesis"
+ 
+ 	// AddrLen is the allowed length (in bytes) for an address.
+ 	//
+@@ -228,6 +229,7 @@ func init() {
+ 	}
+ 
+ 	DefaultNodeHome = filepath.Join(userHomeDir, "."+Name)
++	sdk.DefaultPowerReduction = sdkmath.NewIntFromUint64(1000000000000000000)
+ }
+ 
+ func StoreKeys() (
+diff --git a/assets/cronos.svg b/assets/cronos.svg
+deleted file mode 100644
+index 76cf3aab..00000000
+--- a/assets/cronos.svg
++++ /dev/null
+@@ -1,22 +0,0 @@
+-<svg width="215" height="60" viewBox="0 0 215 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+-<path d="M25.84 1.90735e-06L-1.52588e-05 14.92V44.75L25.84 59.66L51.66 44.75V14.92L25.84 1.90735e-06ZM44.01 40.33L25.84 50.82L7.65999 40.33V19.33L25.84 8.84L44.01 19.33V40.33Z" fill="#002D74"/>
+-<path style="mix-blend-mode:multiply" d="M25.84 59.66L51.66 44.75V14.92L25.84 1.90735e-06V8.84999L44.01 19.34V40.34L25.84 50.82V59.66Z" fill="url(#paint0_linear)"/>
+-<path style="mix-blend-mode:multiply" d="M25.82 0L0 14.91L0 44.74L25.82 59.66V50.81L7.64999 40.32V19.32L25.82 8.84V0Z" fill="url(#paint1_linear)"/>
+-<path d="M37.89 36.8L25.83 43.76L13.76 36.8V22.87L25.83 15.9L37.89 22.87L32.87 25.77L25.83 21.7L18.79 25.77V33.89L25.83 37.96L32.87 33.89L37.89 36.8Z" fill="#002D74"/>
+-<path d="M70.78 32.0903V32.0103C70.7626 30.4296 71.0611 28.8614 71.658 27.3976C72.2549 25.9338 73.1381 24.604 74.2559 23.4862C75.3737 22.3684 76.7035 21.4852 78.1673 20.8883C79.631 20.2914 81.1993 19.9929 82.78 20.0103C84.5131 19.9497 86.2379 20.2774 87.828 20.9695C89.4181 21.6616 90.8333 22.7006 91.97 24.0103L88.66 27.5403C87.05 25.8803 85.35 24.6603 82.74 24.6603C78.91 24.6603 76.08 27.9703 76.08 31.9803V32.0703C76.08 36.1603 78.91 39.4203 82.95 39.4203C84.0931 39.3982 85.2186 39.1346 86.2526 38.6469C87.2866 38.1591 88.2059 37.4583 88.95 36.5903L92.13 39.7303C90.5505 41.6177 88.4309 42.9762 86.0562 43.6231C83.6816 44.27 81.1659 44.1743 78.8473 43.3488C76.5287 42.5233 74.5185 41.0076 73.087 39.0056C71.6555 37.0036 70.8713 34.6113 70.84 32.1503L70.78 32.0903Z" fill="#002D74"/>
+-<path d="M96.86 20.4703H102.17V25.6503C103.61 22.2103 106.26 19.8603 110.31 20.0303V25.6103H110.01C105.39 25.6103 102.17 28.6103 102.17 34.7003V43.4503H96.86V20.4703Z" fill="#002D74"/>
+-<path d="M112.84 32.0903V32.0103C112.919 28.8199 114.238 25.7858 116.519 23.5529C118.799 21.3201 121.86 20.0643 125.051 20.0526C128.243 20.0409 131.313 21.2741 133.609 23.4902C135.906 25.7063 137.248 28.7305 137.35 31.9203V32.0103C137.351 33.6135 137.03 35.2005 136.407 36.6777C135.784 38.1548 134.871 39.4922 133.723 40.6108C132.574 41.7294 131.214 42.6065 129.721 43.1904C128.227 43.7743 126.633 44.0531 125.03 44.0103C123.441 44.0504 121.86 43.7715 120.381 43.1901C118.901 42.6087 117.554 41.7365 116.417 40.6252C115.281 39.5139 114.379 38.186 113.764 36.7201C113.15 35.2541 112.835 33.6798 112.84 32.0903ZM132.08 32.0903V32.0103C132.12 31.0567 131.968 30.1048 131.633 29.2112C131.297 28.3176 130.785 27.5008 130.127 26.8093C129.47 26.1178 128.679 25.5658 127.803 25.1863C126.928 24.8068 125.984 24.6075 125.03 24.6003C120.8 24.6003 118.1 27.9103 118.1 31.9203V32.0103C118.064 32.9559 118.218 33.899 118.552 34.7841C118.887 35.6692 119.395 36.4783 120.048 37.1635C120.7 37.8487 121.484 38.3961 122.352 38.7734C123.219 39.1508 124.154 39.3503 125.1 39.3603C129.38 39.3603 132.08 36.0503 132.08 32.0903Z" fill="#002D74"/>
+-<path d="M142.66 20.4703H147.95V24.0003C148.7 22.7682 149.756 21.7518 151.017 21.0507C152.277 20.3495 153.698 19.9876 155.14 20.0003C160.32 20.0003 163.32 23.4803 163.32 28.7903V43.4603H158.05V30.3903C158.05 26.8203 156.27 24.7803 153.13 24.7803C149.99 24.7803 147.95 26.9203 147.95 30.4803V43.4803H142.64L142.66 20.4703Z" fill="#002D74"/>
+-<path d="M168.44 32.0903V32.0103C168.519 28.8199 169.838 25.7858 172.119 23.5529C174.399 21.3201 177.46 20.0643 180.651 20.0526C183.843 20.0409 186.913 21.2741 189.209 23.4902C191.506 25.7063 192.848 28.7305 192.95 31.9203V32.0103C192.951 33.6135 192.63 35.2005 192.007 36.6777C191.384 38.1548 190.471 39.4922 189.323 40.6108C188.174 41.7294 186.814 42.6065 185.321 43.1904C183.827 43.7743 182.233 44.0531 180.63 44.0103C179.041 44.0504 177.46 43.7715 175.981 43.1901C174.501 42.6087 173.154 41.7365 172.017 40.6252C170.881 39.5139 169.979 38.186 169.364 36.7201C168.75 35.2541 168.435 33.6798 168.44 32.0903ZM187.68 32.0903V32.0103C187.72 31.0567 187.568 30.1048 187.233 29.2112C186.897 28.3176 186.385 27.5008 185.727 26.8093C185.07 26.1178 184.279 25.5658 183.403 25.1863C182.528 24.8068 181.584 24.6075 180.63 24.6003C176.4 24.6003 173.7 27.9103 173.7 31.9203V32.0103C173.664 32.9559 173.818 33.899 174.152 34.7841C174.487 35.6692 174.995 36.4783 175.648 37.1635C176.3 37.8487 177.084 38.3961 177.952 38.7734C178.819 39.1508 179.754 39.3503 180.7 39.3603C184.95 39.3603 187.68 36.0503 187.68 32.0903Z" fill="#002D74"/>
+-<path d="M196.43 40.4503L198.78 36.8803C200.928 38.596 203.564 39.5868 206.31 39.7103C208.58 39.7103 209.88 38.7103 209.88 37.2303V37.1403C209.88 35.3603 207.45 34.7503 204.75 33.9203C201.35 32.9203 197.56 31.5703 197.56 27.2203V27.1303C197.56 22.7303 201.18 20.0803 205.75 20.0803C208.753 20.1361 211.679 21.041 214.19 22.6903L212.1 26.4303C210.166 25.1554 207.932 24.4074 205.62 24.2603C203.62 24.2603 202.4 25.2603 202.4 26.5203V26.6103C202.4 28.3103 204.88 29.0003 207.58 29.8703C210.93 30.9203 214.72 32.4403 214.72 36.5803V36.6603C214.72 41.5003 210.97 43.8903 206.18 43.8903C202.637 43.8649 199.204 42.6539 196.43 40.4503Z" fill="#002D74"/>
+-<defs>
+-<linearGradient id="paint0_linear" x1="38.75" y1="59.66" x2="38.75" y2="29.83" gradientUnits="userSpaceOnUse">
+-<stop stop-color="#002D74"/>
+-<stop offset="1" stop-color="#002D74" stop-opacity="0"/>
+-</linearGradient>
+-<linearGradient id="paint1_linear" x1="12.91" y1="0" x2="12.91" y2="29.83" gradientUnits="userSpaceOnUse">
+-<stop stop-color="#002D74"/>
+-<stop offset="1" stop-color="#002D74" stop-opacity="0"/>
+-</linearGradient>
+-</defs>
+-</svg>
+diff --git a/cmd/cronosd/cmd/root.go b/cmd/cronosd/cmd/root.go
+index 8c767f09..0d62689d 100644
+--- a/cmd/cronosd/cmd/root.go
++++ b/cmd/cronosd/cmd/root.go
+@@ -88,7 +88,7 @@ func NewRootCmd() *cobra.Command {
+ 
+ 	rootCmd := &cobra.Command{
+ 		Use:   app.Name + "d",
+-		Short: "Cronos Daemon",
++		Short: "Genesis L1 Daemon",
+ 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+ 			// set the default command outputs
+ 			cmd.SetOut(cmd.OutOrStdout())
+diff --git a/cmd/cronosd/config/prefix_mainnet.go b/cmd/cronosd/config/prefix_mainnet.go
+index 97b97d04..e48ddb58 100644
+--- a/cmd/cronosd/config/prefix_mainnet.go
++++ b/cmd/cronosd/config/prefix_mainnet.go
+@@ -7,7 +7,7 @@ import sdk "github.com/cosmos/cosmos-sdk/types"
+ 
+ const (
+ 	// Bech32Prefix defines the Bech32 prefix used for Cronos Accounts
+-	Bech32Prefix = "crc"
++	Bech32Prefix = "genesis"
+ 
+ 	// Bech32PrefixAccAddr defines the Bech32 prefix of an account's address
+ 	Bech32PrefixAccAddr = Bech32Prefix
+diff --git a/cmd/cronosd/config/prefix_testnet.go b/cmd/cronosd/config/prefix_testnet.go
+index 8628e4c0..379f909a 100644
+--- a/cmd/cronosd/config/prefix_testnet.go
++++ b/cmd/cronosd/config/prefix_testnet.go
+@@ -7,7 +7,7 @@ import sdk "github.com/cosmos/cosmos-sdk/types"
+ 
+ const (
+ 	// Bech32Prefix defines the Bech32 prefix used for Cronos Accounts
+-	Bech32Prefix = "tcrc"
++	Bech32Prefix = "tgenesis"
+ 
+ 	// Bech32PrefixAccAddr defines the Bech32 prefix of an account's address
+ 	Bech32PrefixAccAddr = Bech32Prefix
+diff --git a/configs/default_app.toml b/configs/default_app.toml
+new file mode 100644
+index 00000000..d0068e65
+--- /dev/null
++++ b/configs/default_app.toml
+@@ -0,0 +1,374 @@
++# This is a TOML config file.
++# For more information, see https://github.com/toml-lang/toml
++
++###############################################################################
++###                           Base Configuration                            ###
++###############################################################################
++
++# The minimum gas prices a validator is willing to accept for processing a
++# transaction. A transaction's fees must meet the minimum of any denomination
++# specified in this config (e.g. 0.25token1;0.0001token2).
++minimum-gas-prices = "50000000000el1"
++
++# default: the last 362880 states are kept, pruning at 10 block intervals
++# nothing: all historic states will be saved, nothing will be deleted (i.e. archiving node)
++# everything: 2 latest states will be kept; pruning at 10 block intervals.
++# custom: allow pruning options to be manually specified through 'pruning-keep-recent', and 'pruning-interval'
++pruning = "nothing"
++
++# These are applied if and only if the pruning strategy is custom.
++pruning-keep-recent = "50000"
++pruning-keep-every = "100"
++pruning-interval = "10"
++
++# HaltHeight contains a non-zero block height at which a node will gracefully
++# halt and shutdown that can be used to assist upgrades and testing.
++#
++# Note: Commitment of state will be attempted on the corresponding block.
++halt-height = 0
++
++# HaltTime contains a non-zero minimum block time (in Unix seconds) at which
++# a node will gracefully halt and shutdown that can be used to assist upgrades
++# and testing.
++#
++# Note: Commitment of state will be attempted on the corresponding block.
++halt-time = 0
++
++# MinRetainBlocks defines the minimum block height offset from the current
++# block being committed, such that all blocks past this offset are pruned
++# from Tendermint. It is used as part of the process of determining the
++# ResponseCommit.RetainHeight value during ABCI Commit. A value of 0 indicates
++# that no blocks should be pruned.
++#
++# This configuration value is only responsible for pruning Tendermint blocks.
++# It has no bearing on application state pruning which is determined by the
++# "pruning-*" configurations.
++#
++# Note: Tendermint block pruning is dependant on this parameter in conunction
++# with the unbonding (safety threshold) period, state pruning and state sync
++# snapshot parameters to determine the correct minimum value of
++# ResponseCommit.RetainHeight.
++min-retain-blocks = 0
++
++# InterBlockCache enables inter-block caching.
++inter-block-cache = true
++
++# IndexEvents defines the set of events in the form {eventType}.{attributeKey},
++# which informs Tendermint what to index. If empty, all events will be indexed.
++#
++# Example:
++# ["message.sender", "message.recipient"]
++index-events = []
++
++# IavlCacheSize set the size of the iavl tree cache. 
++# Default cache size is 50mb.
++iavl-cache-size = 781250
++
++# IavlDisableFastNode enables or disables the fast node feature of IAVL. 
++# Default is false.
++iavl-disable-fastnode = false
++
++# EXPERIMENTAL: IAVLLazyLoading enable/disable the lazy loading of iavl store.
++# Default is false.
++iavl-lazy-loading = false
++
++# AppDBBackend defines the database backend type to use for the application and snapshots DBs.
++# An empty string indicates that a fallback will be used.
++# First fallback is the deprecated compile-time types.DBBackend value.
++# Second fallback (if the types.DBBackend also isn't set), is the db-backend value set in Tendermint's config.toml.
++app-db-backend = ""
++
++###############################################################################
++###                         Telemetry Configuration                         ###
++###############################################################################
++
++[telemetry]
++
++# Prefixed with keys to separate services.
++service-name = ""
++
++# Enabled enables the application telemetry functionality. When enabled,
++# an in-memory sink is also enabled by default. Operators may also enabled
++# other sinks such as Prometheus.
++enabled = false
++
++# Enable prefixing gauge values with hostname.
++enable-hostname = false
++
++# Enable adding hostname to labels.
++enable-hostname-label = false
++
++# Enable adding service to labels.
++enable-service-label = false
++
++# PrometheusRetentionTime, when positive, enables a Prometheus metrics sink.
++prometheus-retention-time = 0
++
++# GlobalLabels defines a global set of name/value label tuples applied to all
++# metrics emitted using the wrapper functions defined in telemetry package.
++#
++# Example:
++# [["chain_id", "cosmoshub-1"]]
++global-labels = [
++]
++
++###############################################################################
++###                           API Configuration                             ###
++###############################################################################
++
++[api]
++
++# Enable defines if the API server should be enabled.
++enable = false
++
++# Swagger defines if swagger documentation should automatically be registered.
++swagger = false
++
++# Address defines the API server to listen on.
++address = "tcp://0.0.0.0:1317"
++
++# MaxOpenConnections defines the number of maximum open connections.
++max-open-connections = 1000
++
++# RPCReadTimeout defines the Tendermint RPC read timeout (in seconds).
++rpc-read-timeout = 10
++
++# RPCWriteTimeout defines the Tendermint RPC write timeout (in seconds).
++rpc-write-timeout = 0
++
++# RPCMaxBodyBytes defines the Tendermint maximum response body (in bytes).
++rpc-max-body-bytes = 1000000
++
++# EnableUnsafeCORS defines if CORS should be enabled (unsafe - use it at your own risk).
++enabled-unsafe-cors = false
++
++###############################################################################
++###                           Rosetta Configuration                         ###
++###############################################################################
++
++[rosetta]
++
++# Enable defines if the Rosetta API server should be enabled.
++enable = false
++
++# Address defines the Rosetta API server to listen on.
++address = ":8080"
++
++# Network defines the name of the blockchain that will be returned by Rosetta.
++blockchain = "app"
++
++# Network defines the name of the network that will be returned by Rosetta.
++network = "network"
++
++# Retries defines the number of retries when connecting to the node before failing.
++retries = 3
++
++# Offline defines if Rosetta server should run in offline mode.
++offline = false
++
++# EnableDefaultSuggestedFee defines if the server should suggest fee by default.
++# If 'construction/medata' is called without gas limit and gas price,
++# suggested fee based on gas-to-suggest and denom-to-suggest will be given.
++enable-fee-suggestion = false
++
++# GasToSuggest defines gas limit when calculating the fee
++gas-to-suggest = 200000
++
++# DenomToSuggest defines the defult denom for fee suggestion.
++# Price must be in minimum-gas-prices.
++denom-to-suggest = "el1"
++
++###############################################################################
++###                           gRPC Configuration                            ###
++###############################################################################
++
++[grpc]
++
++# Enable defines if the gRPC server should be enabled.
++enable = true
++
++# Address defines the gRPC server address to bind to.
++address = "0.0.0.0:9090"
++
++# MaxRecvMsgSize defines the max message size in bytes the server can receive.
++# The default value is 10MB.
++max-recv-msg-size = "10485760"
++
++# MaxSendMsgSize defines the max message size in bytes the server can send.
++# The default value is math.MaxInt32.
++max-send-msg-size = "2147483647"
++
++###############################################################################
++###                        gRPC Web Configuration                           ###
++###############################################################################
++
++[grpc-web]
++
++# GRPCWebEnable defines if the gRPC-web should be enabled.
++# NOTE: gRPC must also be enabled, otherwise, this configuration is a no-op.
++enable = true
++
++# Address defines the gRPC-web server address to bind to.
++address = "0.0.0.0:9091"
++
++# EnableUnsafeCORS defines if CORS should be enabled (unsafe - use it at your own risk).
++enable-unsafe-cors = false
++
++###############################################################################
++###                        State Sync Configuration                         ###
++###############################################################################
++
++# State sync snapshots allow other nodes to rapidly join the network without replaying historical
++# blocks, instead downloading and applying a snapshot of the application state at a given height.
++[state-sync]
++
++# snapshot-interval specifies the block interval at which local state sync snapshots are
++# taken (0 to disable).
++snapshot-interval = 10000
++
++# snapshot-keep-recent specifies the number of recent snapshots to keep and serve (0 to keep all).
++snapshot-keep-recent = 4
++
++###############################################################################
++###                         Store / State Streaming                         ###
++###############################################################################
++
++[store]
++streamers = []
++
++[streamers]
++[streamers.file]
++keys = ["*", ]
++write_dir = ""
++prefix = ""
++
++# output-metadata specifies if output the metadata file which includes the abci request/responses 
++# during processing the block.
++output-metadata = "true"
++
++# stop-node-on-error specifies if propagate the file streamer errors to consensus state machine.
++stop-node-on-error = "true"
++
++# fsync specifies if call fsync after writing the files.
++fsync = "false"
++
++###############################################################################
++###                             EVM Configuration                           ###
++###############################################################################
++
++[evm]
++
++# Tracer defines the 'vm.Tracer' type that the EVM will use when the node is run in
++# debug mode. To enable tracing use the '--evm.tracer' flag when starting your node.
++# Valid types are: json|struct|access_list|markdown
++tracer = ""
++
++# MaxTxGasWanted defines the gas wanted for each eth tx returned in ante handler in check tx mode.
++max-tx-gas-wanted = 0
++
++###############################################################################
++###                           JSON RPC Configuration                        ###
++###############################################################################
++
++[json-rpc]
++
++# Enable defines if the gRPC server should be enabled.
++enable = false
++
++# Address defines the EVM RPC HTTP server address to bind to.
++address = "127.0.0.1:8545"
++
++# Address defines the EVM WebSocket server address to bind to.
++ws-address = "127.0.0.1:8546"
++
++# API defines a list of JSON-RPC namespaces that should be enabled
++# Example: "eth,txpool,personal,net,debug,web3"
++api = "eth,net,web3"
++
++# GasCap sets a cap on gas that can be used in eth_call/estimateGas (0=infinite). Default: 25,000,000.
++gas-cap = 25000000
++
++# EVMTimeout is the global timeout for eth_call. Default: 5s.
++evm-timeout = "5s"
++
++# TxFeeCap is the global tx-fee cap for send transaction. Default: 1eth.
++txfee-cap = 1
++
++# FilterCap sets the global cap for total number of filters that can be created
++filter-cap = 200
++
++# FeeHistoryCap sets the global cap for total number of blocks that can be fetched
++feehistory-cap = 100
++
++# LogsCap defines the max number of results can be returned from single 'eth_getLogs' query.
++logs-cap = 10000
++
++# BlockRangeCap defines the max block range allowed for 'eth_getLogs' query.
++block-range-cap = 10000
++
++# HTTPTimeout is the read/write timeout of http json-rpc server.
++http-timeout = "30s"
++
++# HTTPIdleTimeout is the idle timeout of http json-rpc server.
++http-idle-timeout = "2m0s"
++
++# AllowUnprotectedTxs restricts unprotected (non EIP155 signed) transactions to be submitted via
++# the node's RPC when the global parameter is disabled.
++allow-unprotected-txs = false
++
++# MaxOpenConnections sets the maximum number of simultaneous connections
++# for the server listener.
++max-open-connections = 0
++
++# EnableIndexer enables the custom transaction indexer for the EVM (ethereum transactions).
++enable-indexer = false
++
++# MetricsAddress defines the EVM Metrics server address to bind to. Pass --metrics in CLI to enable
++# Prometheus metrics path: /debug/metrics/prometheus
++metrics-address = "127.0.0.1:6065"
++
++# Maximum number of bytes returned from eth_call or similar invocations.
++return-data-limit = 100000
++
++# Upgrade height for fix of revert gas refund logic when transaction reverted.
++fix-revert-gas-refund-height = 0
++
++###############################################################################
++###                             TLS Configuration                           ###
++###############################################################################
++
++[tls]
++
++# Certificate path defines the cert.pem file path for the TLS configuration.
++certificate-path = ""
++
++# Key path defines the key.pem file path for the TLS configuration.
++key-path = ""
++
++###############################################################################
++###                             MemIAVL Configuration                       ###
++###############################################################################
++
++[memiavl]
++
++# Enable defines if the memiavl should be enabled.
++enable = false
++
++# ZeroCopy defines if the memiavl should return slices pointing to mmap-ed buffers directly (zero-copy),
++# the zero-copied slices must not be retained beyond current block's execution.
++# the sdk address cache will be disabled if zero-copy is enabled.
++zero-copy = false
++
++# AsyncCommitBuffer defines the size of asynchronous commit queue, this greatly improve block catching-up
++# performance, -1 means synchronous commit.
++async-commit-buffer = 0
++
++# SnapshotKeepRecent defines what many old snapshots (excluding the latest one) to keep after new snapshots are
++# taken, defaults to 1 to make sure ibc relayers work.
++snapshot-keep-recent = 1
++
++# SnapshotInterval defines the block interval the memiavl snapshot is taken, default to 1000.
++snapshot-interval = 1000
++
++# CacheSize defines the size of the cache for each memiavl store, default to 1000.
++cache-size = 1000
+diff --git a/configs/default_config.toml b/configs/default_config.toml
+new file mode 100644
+index 00000000..af9ef891
+--- /dev/null
++++ b/configs/default_config.toml
+@@ -0,0 +1,471 @@
++# This is a TOML config file.
++# For more information, see https://github.com/toml-lang/toml
++
++# NOTE: Any path below can be absolute (e.g. "/var/myawesomeapp/data") or
++# relative to the home directory (e.g. "data"). The home directory is
++# "$HOME/.cometbft" by default, but could be changed via $CMTHOME env variable
++# or --home cmd flag.
++
++#######################################################################
++###                   Main Base Config Options                      ###
++#######################################################################
++
++# TCP or UNIX socket address of the ABCI application,
++# or the name of an ABCI application compiled in with the CometBFT binary
++proxy_app = "tcp://127.0.0.1:26658"
++
++# A custom human readable name for this node
++moniker = "mygenesismoniker"
++
++# If this node is many blocks behind the tip of the chain, FastSync
++# allows them to catchup quickly by downloading blocks in parallel
++# and verifying their commits
++fast_sync = true
++
++# Database backend: goleveldb | cleveldb | boltdb | rocksdb | badgerdb
++# * goleveldb (github.com/syndtr/goleveldb - most popular implementation)
++#   - pure go
++#   - stable
++# * cleveldb (uses levigo wrapper)
++#   - fast
++#   - requires gcc
++#   - use cleveldb build tag (go build -tags cleveldb)
++# * boltdb (uses etcd's fork of bolt - github.com/etcd-io/bbolt)
++#   - EXPERIMENTAL
++#   - may be faster is some use-cases (random reads - indexer)
++#   - use boltdb build tag (go build -tags boltdb)
++# * rocksdb (uses github.com/tecbot/gorocksdb)
++#   - EXPERIMENTAL
++#   - requires gcc
++#   - use rocksdb build tag (go build -tags rocksdb)
++# * badgerdb (uses github.com/dgraph-io/badger)
++#   - EXPERIMENTAL
++#   - use badgerdb build tag (go build -tags badgerdb)
++db_backend = "goleveldb"
++
++# Database directory
++db_dir = "data"
++
++# Output level for logging, including package level options
++log_level = "warn"
++
++# Output format: 'plain' (colored text) or 'json'
++log_format = "plain"
++
++##### additional base config options #####
++
++# Path to the JSON file containing the initial validator set and other meta data
++genesis_file = "config/genesis.json"
++
++# Path to the JSON file containing the private key to use as a validator in the consensus protocol
++priv_validator_key_file = "config/priv_validator_key.json"
++
++# Path to the JSON file containing the last sign state of a validator
++priv_validator_state_file = "data/priv_validator_state.json"
++
++# TCP or UNIX socket address for CometBFT to listen on for
++# connections from an external PrivValidator process
++priv_validator_laddr = ""
++
++# Path to the JSON file containing the private key to use for node authentication in the p2p protocol
++node_key_file = "config/node_key.json"
++
++# Mechanism to connect to the ABCI application: socket | grpc
++abci = "socket"
++
++# If true, query the ABCI app on connecting to a new peer
++# so the app can decide if we should keep the connection or not
++filter_peers = false
++
++
++#######################################################################
++###                 Advanced Configuration Options                  ###
++#######################################################################
++
++#######################################################
++###       RPC Server Configuration Options          ###
++#######################################################
++[rpc]
++
++# TCP or UNIX socket address for the RPC server to listen on
++laddr = "tcp://127.0.0.1:26657"
++
++# A list of origins a cross-domain request can be executed from
++# Default value '[]' disables cors support
++# Use '["*"]' to allow any origin
++cors_allowed_origins = []
++
++# A list of methods the client is allowed to use with cross-domain requests
++cors_allowed_methods = ["HEAD", "GET", "POST", ]
++
++# A list of non simple headers the client is allowed to use with cross-domain requests
++cors_allowed_headers = ["Origin", "Accept", "Content-Type", "X-Requested-With", "X-Server-Time", ]
++
++# TCP or UNIX socket address for the gRPC server to listen on
++# NOTE: This server only supports /broadcast_tx_commit
++grpc_laddr = ""
++
++# Maximum number of simultaneous connections.
++# Does not include RPC (HTTP&WebSocket) connections. See max_open_connections
++# If you want to accept a larger number than the default, make sure
++# you increase your OS limits.
++# 0 - unlimited.
++# Should be < {ulimit -Sn} - {MaxNumInboundPeers} - {MaxNumOutboundPeers} - {N of wal, db and other open files}
++# 1024 - 40 - 10 - 50 = 924 = ~900
++grpc_max_open_connections = 900
++
++# Activate unsafe RPC commands like /dial_seeds and /unsafe_flush_mempool
++unsafe = false
++
++# Maximum number of simultaneous connections (including WebSocket).
++# Does not include gRPC connections. See grpc_max_open_connections
++# If you want to accept a larger number than the default, make sure
++# you increase your OS limits.
++# 0 - unlimited.
++# Should be < {ulimit -Sn} - {MaxNumInboundPeers} - {MaxNumOutboundPeers} - {N of wal, db and other open files}
++# 1024 - 40 - 10 - 50 = 924 = ~900
++max_open_connections = 900
++
++# Maximum number of unique clientIDs that can /subscribe
++# If you're using /broadcast_tx_commit, set to the estimated maximum number
++# of broadcast_tx_commit calls per block.
++max_subscription_clients = 100
++
++# Maximum number of unique queries a given client can /subscribe to
++# If you're using GRPC (or Local RPC client) and /broadcast_tx_commit, set to
++# the estimated # maximum number of broadcast_tx_commit calls per block.
++max_subscriptions_per_client = 5
++
++# Experimental parameter to specify the maximum number of events a node will
++# buffer, per subscription, before returning an error and closing the
++# subscription. Must be set to at least 100, but higher values will accommodate
++# higher event throughput rates (and will use more memory).
++experimental_subscription_buffer_size = 200
++
++# Experimental parameter to specify the maximum number of RPC responses that
++# can be buffered per WebSocket client. If clients cannot read from the
++# WebSocket endpoint fast enough, they will be disconnected, so increasing this
++# parameter may reduce the chances of them being disconnected (but will cause
++# the node to use more memory).
++#
++# Must be at least the same as "experimental_subscription_buffer_size",
++# otherwise connections could be dropped unnecessarily. This value should
++# ideally be somewhat higher than "experimental_subscription_buffer_size" to
++# accommodate non-subscription-related RPC responses.
++experimental_websocket_write_buffer_size = 200
++
++# If a WebSocket client cannot read fast enough, at present we may
++# silently drop events instead of generating an error or disconnecting the
++# client.
++#
++# Enabling this experimental parameter will cause the WebSocket connection to
++# be closed instead if it cannot read fast enough, allowing for greater
++# predictability in subscription behaviour.
++experimental_close_on_slow_client = false
++
++# How long to wait for a tx to be committed during /broadcast_tx_commit.
++# WARNING: Using a value larger than 10s will result in increasing the
++# global HTTP write timeout, which applies to all connections and endpoints.
++# See https://github.com/tendermint/tendermint/issues/3435
++timeout_broadcast_tx_commit = "10s"
++
++# Maximum size of request body, in bytes
++max_body_bytes = 1000000
++
++# Maximum size of request header, in bytes
++max_header_bytes = 1048576
++
++# The path to a file containing certificate that is used to create the HTTPS server.
++# Might be either absolute path or path related to CometBFT's config directory.
++# If the certificate is signed by a certificate authority,
++# the certFile should be the concatenation of the server's certificate, any intermediates,
++# and the CA's certificate.
++# NOTE: both tls_cert_file and tls_key_file must be present for CometBFT to create HTTPS server.
++# Otherwise, HTTP server is run.
++tls_cert_file = ""
++
++# The path to a file containing matching private key that is used to create the HTTPS server.
++# Might be either absolute path or path related to CometBFT's config directory.
++# NOTE: both tls-cert-file and tls-key-file must be present for CometBFT to create HTTPS server.
++# Otherwise, HTTP server is run.
++tls_key_file = ""
++
++# pprof listen address (https://golang.org/pkg/net/http/pprof)
++pprof_laddr = "localhost:6060"
++
++#######################################################
++###           P2P Configuration Options             ###
++#######################################################
++[p2p]
++
++# Address to listen for incoming connections
++laddr = "tcp://0.0.0.0:26656"
++
++# Address to advertise to peers for them to dial
++# If empty, will use the same port as the laddr,
++# and will introspect on the listener or use UPnP
++# to figure out the address. ip and port are required
++# example: 159.89.10.97:26656
++external_address = ""
++
++# Comma separated list of seed nodes to connect to
++seeds = ""
++
++# Comma separated list of nodes to keep persistent connections to
++persistent_peers = ""
++
++# UPNP port forwarding
++upnp = false
++
++# Path to address book
++addr_book_file = "config/addrbook.json"
++
++# Set true for strict address routability rules
++# Set false for private or local networks
++addr_book_strict = true
++
++# Maximum number of inbound peers
++max_num_inbound_peers = 40
++
++# Maximum number of outbound peers to connect to, excluding persistent peers
++max_num_outbound_peers = 10
++
++# List of node IDs, to which a connection will be (re)established ignoring any existing limits
++unconditional_peer_ids = ""
++
++# Maximum pause when redialing a persistent peer (if zero, exponential backoff is used)
++persistent_peers_max_dial_period = "0s"
++
++# Time to wait before flushing messages out on the connection
++flush_throttle_timeout = "100ms"
++
++# Maximum size of a message packet payload, in bytes
++max_packet_msg_payload_size = 1024
++
++# Rate at which packets can be sent, in bytes/second
++send_rate = 5120000
++
++# Rate at which packets can be received, in bytes/second
++recv_rate = 5120000
++
++# Set true to enable the peer-exchange reactor
++pex = true
++
++# Seed mode, in which node constantly crawls the network and looks for
++# peers. If another node asks it for addresses, it responds and disconnects.
++#
++# Does not work if the peer-exchange reactor is disabled.
++seed_mode = false
++
++# Comma separated list of peer IDs to keep private (will not be gossiped to other peers)
++private_peer_ids = ""
++
++# Toggle to disable guard against peers connecting from the same ip.
++allow_duplicate_ip = false
++
++# Peer connection configuration.
++handshake_timeout = "20s"
++dial_timeout = "3s"
++
++#######################################################
++###          Mempool Configuration Option          ###
++#######################################################
++[mempool]
++
++# Mempool version to use:
++#   1) "v0" - (default) FIFO mempool.
++#   2) "v1" - prioritized mempool.
++version = "v0"
++
++# Recheck (default: true) defines whether CometBFT should recheck the
++# validity for all remaining transaction in the mempool after a block.
++# Since a block affects the application state, some transactions in the
++# mempool may become invalid. If this does not apply to your application,
++# you can disable rechecking.
++recheck = true
++broadcast = true
++wal_dir = ""
++
++# Maximum number of transactions in the mempool
++size = 5000
++
++# Limit the total size of all txs in the mempool.
++# This only accounts for raw transactions (e.g. given 1MB transactions and
++# max_txs_bytes=5MB, mempool will only accept 5 transactions).
++max_txs_bytes = 1073741824
++
++# Size of the cache (used to filter transactions we saw earlier) in transactions
++cache_size = 10000
++
++# Do not remove invalid transactions from the cache (default: false)
++# Set to true if it's not possible for any invalid transaction to become valid
++# again in the future.
++keep-invalid-txs-in-cache = false
++
++# Maximum size of a single transaction.
++# NOTE: the max size of a tx transmitted over the network is {max_tx_bytes}.
++max_tx_bytes = 1048576
++
++# Maximum size of a batch of transactions to send to a peer
++# Including space needed by encoding (one varint per transaction).
++# XXX: Unused due to https://github.com/tendermint/tendermint/issues/5796
++max_batch_bytes = 0
++
++# ttl-duration, if non-zero, defines the maximum amount of time a transaction
++# can exist for in the mempool.
++#
++# Note, if ttl-num-blocks is also defined, a transaction will be removed if it
++# has existed in the mempool at least ttl-num-blocks number of blocks or if it's
++# insertion time into the mempool is beyond ttl-duration.
++ttl-duration = "0s"
++
++# ttl-num-blocks, if non-zero, defines the maximum number of blocks a transaction
++# can exist for in the mempool.
++#
++# Note, if ttl-duration is also defined, a transaction will be removed if it
++# has existed in the mempool at least ttl-num-blocks number of blocks or if
++# it's insertion time into the mempool is beyond ttl-duration.
++ttl-num-blocks = 0
++
++#######################################################
++###         State Sync Configuration Options        ###
++#######################################################
++[statesync]
++# State sync rapidly bootstraps a new node by discovering, fetching, and restoring a state machine
++# snapshot from peers instead of fetching and replaying historical blocks. Requires some peers in
++# the network to take and serve state machine snapshots. State sync is not attempted if the node
++# has any local state (LastBlockHeight > 0). The node will have a truncated block history,
++# starting from the height of the snapshot.
++enable = true
++
++# RPC servers (comma-separated) for light client verification of the synced state machine and
++# retrieval of state data for node bootstrapping. Also needs a trusted height and corresponding
++# header hash obtained from a trusted source, and a period during which validators can be trusted.
++#
++# For Cosmos SDK-based chains, trust_period should usually be about 2/3 of the unbonding time (~2
++# weeks) during which they can be financially punished (slashed) for misbehavior.
++rpc_servers = "https://26657.genesisl1.org:443,https://26657.genesisl1.org:443"
++trust_height = 0
++trust_hash = ""
++trust_period = "168h0m0s"
++
++# Time to spend discovering snapshots before initiating a restore.
++discovery_time = "15s"
++
++# Temporary directory for state sync snapshot chunks, defaults to the OS tempdir (typically /tmp).
++# Will create a new, randomly named directory within, and remove it when done.
++temp_dir = ""
++
++# The timeout duration before re-requesting a chunk, possibly from a different
++# peer (default: 1 minute).
++chunk_request_timeout = "10s"
++
++# The number of concurrent chunk fetchers to run (default: 1).
++chunk_fetchers = "4"
++
++#######################################################
++###       Fast Sync Configuration Connections       ###
++#######################################################
++[fastsync]
++
++# Fast Sync version to use:
++#   1) "v0" (default) - the legacy fast sync implementation
++#   2) "v1" - refactor of v0 version for better testability
++#   2) "v2" - complete redesign of v0, optimized for testability & readability
++version = "v0"
++
++#######################################################
++###         Consensus Configuration Options         ###
++#######################################################
++[consensus]
++
++wal_file = "data/cs.wal/wal"
++
++# How long we wait for a proposal block before prevoting nil
++timeout_propose = "3s"
++# How much timeout_propose increases with each round
++timeout_propose_delta = "500ms"
++# How long we wait after receiving +2/3 prevotes for “anything” (ie. not a single block or nil)
++timeout_prevote = "1s"
++# How much the timeout_prevote increases with each round
++timeout_prevote_delta = "500ms"
++# How long we wait after receiving +2/3 precommits for “anything” (ie. not a single block or nil)
++timeout_precommit = "1s"
++# How much the timeout_precommit increases with each round
++timeout_precommit_delta = "500ms"
++# How long we wait after committing a block, before starting on the new
++# height (this gives us a chance to receive some more precommits, even
++# though we already have +2/3).
++timeout_commit = "14s"
++
++# How many blocks to look back to check existence of the node's consensus votes before joining consensus
++# When non-zero, the node will panic upon restart
++# if the same consensus key was used to sign {double_sign_check_height} last blocks.
++# So, validators should stop the state machine, wait for some blocks, and then restart the state machine to avoid panic.
++double_sign_check_height = 0
++
++# Make progress as soon as we have all the precommits (as if TimeoutCommit = 0)
++skip_timeout_commit = false
++
++# EmptyBlocks mode and possible interval between empty blocks
++create_empty_blocks = true
++create_empty_blocks_interval = "0s"
++
++# Reactor sleep duration parameters
++peer_gossip_sleep_duration = "100ms"
++peer_query_maj23_sleep_duration = "2s"
++
++#######################################################
++###         Storage Configuration Options           ###
++#######################################################
++[storage]
++
++# Set to true to discard ABCI responses from the state store, which can save a
++# considerable amount of disk space. Set to false to ensure ABCI responses are
++# persisted. ABCI responses are required for /block_results RPC queries, and to
++# reindex events in the command-line tool.
++discard_abci_responses = false
++
++#######################################################
++###   Transaction Indexer Configuration Options     ###
++#######################################################
++[tx_index]
++
++# What indexer to use for transactions
++#
++# The application will set which txs to index. In some cases a node operator will be able
++# to decide which txs to index based on configuration set in the application.
++#
++# Options:
++#   1) "null"
++#   2) "kv" (default) - the simplest possible indexer, backed by key-value storage (defaults to levelDB; see DBBackend).
++# 		- When "kv" is chosen "tx.height" and "tx.hash" will always be indexed.
++#   3) "psql" - the indexer services backed by PostgreSQL.
++# When "kv" or "psql" is chosen "tx.height" and "tx.hash" will always be indexed.
++indexer = "kv"
++
++# The PostgreSQL connection configuration, the connection format:
++#   postgresql://<user>:<password>@<host>:<port>/<db>?<opts>
++psql-conn = ""
++
++#######################################################
++###       Instrumentation Configuration Options     ###
++#######################################################
++[instrumentation]
++
++# When true, Prometheus metrics are served under /metrics on
++# PrometheusListenAddr.
++# Check out the documentation for the list of available metrics.
++prometheus = false
++
++# Address to listen for Prometheus collector(s) connections
++prometheus_listen_addr = ":26660"
++
++# Maximum number of simultaneous connections.
++# If you want to accept a larger number than the default, make sure
++# you increase your OS limits.
++# 0 - unlimited.
++max_open_connections = 3
++
++# Instrumentation namespace
++namespace = "cometbft"
+diff --git a/default.nix b/default.nix
+index dc0be6a3..dfa45a0c 100644
+--- a/default.nix
++++ b/default.nix
+@@ -12,7 +12,7 @@
+ }:
+ let
+   version = "v1.5.4";
+-  pname = "cronosd";
++  pname = "genesisd";
+   tags = [
+     "ledger"
+     "netgo"
+diff --git a/scripts/codesign_macos.sh b/scripts/codesign_macos.sh
+index ac43e87d..2c22de36 100755
+--- a/scripts/codesign_macos.sh
++++ b/scripts/codesign_macos.sh
+@@ -8,7 +8,7 @@ TMPD=$(mktemp -d)
+ tar xfz $1 -C $TMPD
+ 
+ echo "Codesign"
+-find $TMPD -type f \( -name "*.dylib" -or -name cronosd \) | xargs -I{} codesign --force --options runtime -v -s "$MAC_CODE_API_DEVELOPER_ID" {}
++find $TMPD -type f \( -name "*.dylib" -or -name genesisd \) | xargs -I{} codesign --force --options runtime -v -s "$MAC_CODE_API_DEVELOPER_ID" {}
+ 
+ echo "Archive"
+ WORKDIR=$PWD
+diff --git a/scripts/cronos-devnet.yaml b/scripts/cronos-devnet.yaml
+index 5c993161..69f398d5 100644
+--- a/scripts/cronos-devnet.yaml
++++ b/scripts/cronos-devnet.yaml
+@@ -1,6 +1,6 @@
+ dotenv: .env
+ cronos_777-1:
+-  cmd: cronosd
++  cmd: genesisd
+   start-flags: "--trace"
+   app-config:
+     minimum-gas-prices: 0basetcro
+diff --git a/scripts/recover-cronos-tags.sh b/scripts/recover-cronos-tags.sh
+new file mode 100755
+index 00000000..6459c0b9
+--- /dev/null
++++ b/scripts/recover-cronos-tags.sh
+@@ -0,0 +1,51 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Recover specific Cronos upstream tags in this local clone.
++# Usage:
++#   ./scripts/recover-cronos-tags.sh
++#   ./scripts/recover-cronos-tags.sh v1.5.4 v1.6.2
++
++TARGET_TAGS=("${@:-}")
++if [ ${#TARGET_TAGS[@]} -eq 0 ]; then
++  TARGET_TAGS=(v1.1.1 v1.2.2 v1.3.4 v1.4.11 v1.5.4 v1.6.2)
++fi
++
++REMOTE_NAME="cronos"
++REMOTE_URL="https://github.com/crypto-org-chain/cronos.git"
++
++if ! git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
++  git remote add "$REMOTE_NAME" "$REMOTE_URL"
++fi
++
++echo "Using remote '$REMOTE_NAME' -> $(git remote get-url "$REMOTE_NAME")"
++
++echo "Checking remote connectivity..."
++if ! git ls-remote "$REMOTE_NAME" >/dev/null 2>&1; then
++  echo "ERROR: unable to reach remote '$REMOTE_NAME'."
++  echo "Hint: verify outbound network/proxy access to github.com, then rerun."
++  exit 2
++fi
++
++for tag in "${TARGET_TAGS[@]}"; do
++  echo "\n==> recovering tag: $tag"
++  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
++    echo "  already present locally"
++    continue
++  fi
++
++  if git ls-remote --tags "$REMOTE_NAME" "refs/tags/$tag" | grep -q .; then
++    git fetch "$REMOTE_NAME" "refs/tags/$tag:refs/tags/$tag"
++    echo "  imported $tag"
++  else
++    echo "  NOT FOUND on remote: $tag"
++  fi
++
++done
++
++echo "\nRecovered tags now available locally:"
++for tag in "${TARGET_TAGS[@]}"; do
++  if git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
++    printf "  - %s -> %s\n" "$tag" "$(git rev-list -n 1 "$tag")"
++  fi
++done
+diff --git a/scripts/release.sh b/scripts/release.sh
+index 3be3b5a0..0b93cd88 100755
+--- a/scripts/release.sh
++++ b/scripts/release.sh
+@@ -11,7 +11,7 @@ build() {
+     network=$1
+     host="$2"
+     name="$3"
+-    pkg="cronosd${network}-${build_type}"
++    pkg="genesisd${network}-${build_type}"
+     if [[ "$host" == "native" ]]; then
+         if [[ "${build_platform: -6}" == "-linux" ]]; then
+             # static link for linux targets
+diff --git a/services/genesisd.service b/services/genesisd.service
+new file mode 100644
+index 00000000..8be87875
+--- /dev/null
++++ b/services/genesisd.service
+@@ -0,0 +1,15 @@
++[Unit]
++Description=genesis
++After=network.target
++
++[Service]
++Type=simple
++User=root
++WorkingDirectory=/root
++ExecStart=/root/go/bin/genesisd start --log_level info
++Restart=on-failure
++RestartSec=60 
++LimitNOFILE=50000 
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/services/genesisdrpc.service b/services/genesisdrpc.service
+new file mode 100644
+index 00000000..eac64906
+--- /dev/null
++++ b/services/genesisdrpc.service
+@@ -0,0 +1,15 @@
++[Unit]
++Description=genesis rpc
++After=network.target
++
++[Service]
++Type=simple
++User=root
++WorkingDirectory=/root
++ExecStart=/root/go/bin/genesisd start --pruning=nothing --trace --log_level=info --minimum-gas-prices=1000000000el1 --json-rpc.api eth,debug,txpool,personal,net,web3
++Restart=on-failure
++RestartSec=60 
++LimitNOFILE=50000 
++
++[Install]
++WantedBy=multi-user.target
+diff --git a/setup/README.md b/setup/README.md
+new file mode 100644
+index 00000000..2a3b1c15
+--- /dev/null
++++ b/setup/README.md
+@@ -0,0 +1,96 @@
++# Setup
++
++## dependencies.sh
++
++This script installs all the dependencies (and system configurations) that are necessary for the binary to run. Since this file already gets called from within the other scripts, it is not required to call this yourself.
++
++## upgrade.sh
++
++> [!WARNING]
++> This script should only be used if you run a full-node and have to perform the **"plan_crypto"**-upgrade!
++>
++> This means that you are currently operating on the Evmos fork of GenesisL1 (repo: [`genesis-ethermint`](https://github.com/alpha-omega-labs/genesis-ethermint)) and the node synced till height: `7400000` which caused it to panic.
++
++This script takes care of the needed steps to upgrade the node to the new fork:
++
++- It stops the node (the service)
++- Installs all the necessary dependencies
++- Creates a backup of existing _config.toml_ or _app.toml_ files (as _.toml.bak_)
++- Introduces new config files
++- Fetches latest seeds and peers
++- Builds the binaries
++
++### Usage
++
++```
++sh setup/upgrade.sh
++```
++> After a successful upgrade, start the node again using `systemctl start genesisd` and monitor its status with `journalctl -fu genesisd -ocat`.
++
++## quick-sync.sh
++
++> [!CAUTION]
++> Running this will **wipe the entire database** (the _/data_-folder **excluding** the priv_validator_state.json file).
++>
++> Make a backup if needed: [utils/backup/create.sh](/utils/backup/create.sh).
++
++As the name suggests, this script should be used to quick-sync a node:
++
++- It stops the service (if it exists)
++- Installs all the necessary dependencies
++- Builds the binaries
++- Resets config files
++- Fetches state, seeds and peers
++- Initializes the node
++
++### Usage
++
++```
++sh setup/quick-sync.sh <moniker>
++```
++> If you can't access the `genesisd` command afterwards, execute the `. ~/.bashrc` _or_ `source ~/.bashrc` command in your terminal.
++>
++> **IMPORTANT:** currently, snapshots must be bootstrapped manually. Please refer to the main [README](/README.md) for further instructions.
++
++## state-sync.sh
++
++> [!CAUTION]
++> Running this will **wipe the entire database** (the _/data_-folder **excluding** the priv_validator_state.json file).
++> 
++> Make a backup if needed: [utils/backup/create.sh](/utils/backup/create.sh).
++
++This script takes care of the needed steps to join the network via State Sync:
++
++- It stops the service (if it exists)
++- Installs all the necessary dependencies
++- Builds the binaries
++- Initializes the node
++- Resets config files
++- Fetches latest seeds and peers
++- Fetches `genesis.json`-file
++- Fetches RPC servers
++- Recalibrates **[statesync]** settings to a recent height (**default:** `<latest_height>` - `2000`)
++
++### Usage
++
++```
++sh setup/state-sync.sh <moniker>
++```
++> If you wish to change the default _[height_interval]_ of `2000`, run [utils/tools/restate-sync.sh](/utils/tools/restate-sync.sh) _[height_interval]_ yourself _after_ having run _setup/state-sync.sh_; see [utils/README.md](/utils) for more information.
++>
++> If you can't access the `genesisd` command afterwards, execute the `. ~/.bashrc` _or_ `source ~/.bashrc` command in your terminal.
++
++## create-validator.sh
++
++> [!IMPORTANT]
++> _create-validator.sh_ requires a key.
++>
++> If you haven't already created or imported one, use: [utils/key/create.sh](/utils/key/create.sh) _or_ [utils/key/import.sh](/utils/key/import.sh).
++
++This script should only be run once you're **fully synced**. It's a wizard; prompting the user only the required fields for creating a validator.
++
++### Usage
++
++```
++sh setup/create-validator.sh <moniker> <key_alias>
++```
+diff --git a/setup/create-validator.sh b/setup/create-validator.sh
+new file mode 100644
+index 00000000..d435ced2
+--- /dev/null
++++ b/setup/create-validator.sh
+@@ -0,0 +1,89 @@
++#!/bin/bash
++
++# Arguments check
++if [ -z "$1" ] || [ -z "$2" ]; then
++    echo ""
++    echo "Usage: sh $0 <moniker> <key_alias>"
++    echo ""
++    exit 1
++fi
++
++cat <<"EOF"
++
++  /$$$$$$                                          /$$                 /$$         /$$       
++ /$$__  $$                                        |__/                | $$       /$$$$       
++| $$  \__/  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$ /$$  /$$$$$$$      | $$      |_  $$       
++| $$ /$$$$ /$$__  $$| $$__  $$ /$$__  $$ /$$_____/| $$ /$$_____/      | $$        | $$       
++| $$|_  $$| $$$$$$$$| $$  \ $$| $$$$$$$$|  $$$$$$ | $$|  $$$$$$       | $$        | $$       
++| $$  \ $$| $$_____/| $$  | $$| $$_____/ \____  $$| $$ \____  $$      | $$        | $$       
++|  $$$$$$/|  $$$$$$$| $$  | $$|  $$$$$$$ /$$$$$$$/| $$ /$$$$$$$/      | $$$$$$$$ /$$$$$$     
++ \______/  \_______/|__/  |__/ \_______/|_______/ |__/|_______/       |________/|______/     
++                                                                                             
++Welcome to the decentralized blockchain Renaissance, above money & beyond cryptocurrency!
++EOF
++
++echo ""
++echo "Creating a validator should only be done if your node is all caught up (at the latest"
++echo "height) and you've generated or imported a key. In the /utils-folder you can find two"
++echo "scripts making it easier to either create a key or import one using a private key."
++echo ""
++echo "If you're all set, then you can proceed."
++read -p "Ready? (y/N): " ANSWER
++
++ANSWER=$(echo "$ANSWER" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$ANSWER" != "y" ]; then
++    echo "Aborted."
++    exit 1
++fi
++
++# Root of the current repository
++REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the variables file
++. "$REPO_ROOT/utils/_variables.sh"
++
++# Arguments
++MONIKER=$1
++KEY_ALIAS=$2
++
++# Set default values
++DEFAULT_AMOUNT=1
++DEFAULT_COMMISSION_RATE=0.05
++DEFAULT_COMMISSION_MAX_RATE=0.99
++DEFAULT_COMMISSION_MAX_CHANGE_RATE=0.01
++DEFAULT_MINIMUM_SELF_DELEGATION=1000000
++DECIMALS="000000000000000000"
++DEFAULT_FEES="210000000000000000000"
++
++# Read optional user inputs
++read -p "What's the amount you'll self-delegate? (denom: L1) [default: $DEFAULT_AMOUNT]: " AMOUNT
++AMOUNT=${AMOUNT:-$DEFAULT_AMOUNT}
++read -p "What will be your commission rate percentage? (default: $DEFAULT_COMMISSION_RATE): " COMMISSION_RATE
++COMMISSION_RATE=${COMMISSION_RATE:-$DEFAULT_COMMISSION_RATE}
++read -p "What will be your max commission rate percentage? (default: $DEFAULT_COMMISSION_MAX_RATE): " COMMISSION_MAX_RATE
++COMMISSION_MAX_RATE=${COMMISSION_MAX_RATE:-$DEFAULT_COMMISSION_MAX_RATE}
++read -p "What will be your max commission change rate percentage per day? (default: $DEFAULT_COMMISSION_MAX_CHANGE_RATE): " COMMISSION_MAX_CHANGE_RATE
++COMMISSION_MAX_CHANGE_RATE=${COMMISSION_MAX_CHANGE_RATE:-$DEFAULT_COMMISSION_MAX_CHANGE_RATE}
++read -p "What will be your minimum self delegation? (denom: el1) [default: $DEFAULT_MINIMUM_SELF_DELEGATION]: " MINIMUM_SELF_DELEGATION
++MINIMUM_SELF_DELEGATION=${MINIMUM_SELF_DELEGATION:-$DEFAULT_MINIMUM_SELF_DELEGATION}
++read -p "What will you set for gas fees? (denom: el1) [default: $DEFAULT_FEES]: " FEES
++FEES=${FEES:-$DEFAULT_FEES}
++
++COMMAND_TO_EXECUTE="$BINARY_NAME tx staking create-validator \
++--amount "$AMOUNT$DECIMALS"el1 \
++--pubkey '$($BINARY_NAME tendermint show-validator)' \
++--moniker "$MONIKER" \
++--chain-id "$CHAIN_ID" \
++--commission-rate "$COMMISSION_RATE" \
++--commission-max-rate "$COMMISSION_MAX_RATE" \
++--commission-max-change-rate "$COMMISSION_MAX_CHANGE_RATE" \
++--min-self-delegation "$MINIMUM_SELF_DELEGATION" \
++--gas "2200000" \
++--from "$KEY_ALIAS" \
++--fees "$FEES"el1 \
++-y"
++
++echo ""
++echo "will execute: $COMMAND_TO_EXECUTE"
++eval "$COMMAND_TO_EXECUTE"
+\ No newline at end of file
+diff --git a/setup/dependencies.sh b/setup/dependencies.sh
+new file mode 100644
+index 00000000..e5d55b05
+--- /dev/null
++++ b/setup/dependencies.sh
+@@ -0,0 +1,36 @@
++#!/bin/bash
++
++# Helper-function: adds a line to a file if it doesn't already exist (to prevent duplicates)
++add_line_to_file() {
++    local line="$1"
++    local file="$2"
++    local use_sudo="$3"
++
++    if ! grep -qF "$line" "$file"; then
++        if $use_sudo; then
++            echo "$line" | sudo tee -a "$file" > /dev/null
++        else
++            echo "$line" >> "$file"
++        fi
++
++        echo "Line '$line' added to $file."
++    else
++        echo "Line '$line' already exists in $file."
++    fi
++}
++
++# System update and installation of dependencies
++sudo apt-get update -y
++sudo apt-get install jq git wget make gcc build-essential snapd -y
++snap install go --channel=1.20/stable --classic
++snap refresh go --channel=1.20/stable --classic
++
++# Add GOPATH
++export PATH=$PATH:$(go env GOPATH)/bin
++add_line_to_file 'export PATH=$PATH:$(go env GOPATH)/bin' ~/.bashrc false
++
++# Global change of open file limits
++add_line_to_file "* - nofile 50000" /etc/security/limits.conf false
++add_line_to_file "root - nofile 50000" /etc/security/limits.conf false
++add_line_to_file "fs.file-max = 50000" /etc/sysctl.conf false
++ulimit -n 50000
+diff --git a/setup/quick-sync.sh b/setup/quick-sync.sh
+new file mode 100644
+index 00000000..606297fc
+--- /dev/null
++++ b/setup/quick-sync.sh
+@@ -0,0 +1,92 @@
++#!/bin/bash
++
++# Arguments check
++if [ -z "$1" ]; then
++    echo ""
++    echo "Usage: sh $0 <moniker>"
++    echo ""
++    exit 1
++fi
++
++cat <<"EOF"
++
++  /$$$$$$                                          /$$                 /$$         /$$       
++ /$$__  $$                                        |__/                | $$       /$$$$       
++| $$  \__/  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$ /$$  /$$$$$$$      | $$      |_  $$       
++| $$ /$$$$ /$$__  $$| $$__  $$ /$$__  $$ /$$_____/| $$ /$$_____/      | $$        | $$       
++| $$|_  $$| $$$$$$$$| $$  \ $$| $$$$$$$$|  $$$$$$ | $$|  $$$$$$       | $$        | $$       
++| $$  \ $$| $$_____/| $$  | $$| $$_____/ \____  $$| $$ \____  $$      | $$        | $$       
++|  $$$$$$/|  $$$$$$$| $$  | $$|  $$$$$$$ /$$$$$$$/| $$ /$$$$$$$/      | $$$$$$$$ /$$$$$$     
++ \______/  \_______/|__/  |__/ \_______/|_______/ |__/|_______/       |________/|______/     
++
++Welcome to the decentralized blockchain Renaissance, above money & beyond cryptocurrency!
++EOF
++
++echo ""
++echo "This script should only be used if you intend on bootstrapping a snapshot of the GenesisL1 mainnet."
++echo "This will not take care of any backups! So make sure to do this if you have an existing .genesis"
++echo "folder already. You can use utils/backup/create.sh for this."
++echo ""
++read -p "Do you want to continue? (y/N): " ANSWER
++
++ANSWER=$(echo "$ANSWER" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$ANSWER" != "y" ]; then
++    echo "Aborted."
++    exit 1
++fi
++
++# Root of the current repository
++REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the variables file
++. "$REPO_ROOT/utils/_variables.sh"
++
++# Arguments
++MONIKER=$1
++
++# Stop processes (if any are running)
++systemctl stop $BINARY_NAME
++
++# cd to root of the repository
++cd $REPO_ROOT
++
++# System update and installation of dependencies
++. ./setup/dependencies.sh
++
++# Building binaries
++go mod tidy
++make install
++
++# Set chain-id
++$BINARY_NAME config chain-id $CHAIN_ID
++
++# Init node
++$BINARY_NAME init $MONIKER --chain-id $CHAIN_ID -o
++
++# Chain specific configurations (i.e. timeout_commit 10s, min gas price 50gel)
++cp "./configs/default_app.toml" $CONFIG_DIR/app.toml
++cp "./configs/default_config.toml" $CONFIG_DIR/config.toml
++# Set moniker again since the configs got overwritten
++sed -i "s/moniker = .*/moniker = \"$MONIKER\"/" $CONFIG_DIR/config.toml
++
++# Fetch state file from genesis-parameters repo
++sh ./utils/fetch/state.sh
++
++# Fetch latest seeds and peers list from genesis-parameters repo
++sh ./utils/fetch/peers.sh
++
++# Reset to imported genesis.json (commented out)
++# $BINARY_NAME tendermint unsafe-reset-all
++
++# Install service (commented out)
++# sh ./utils/service/install.sh
++
++# Echo result
++echo ""
++echo "Done!"
++echo ""
++echo "o Check if you're able to access the $BINARY_NAME command. If you can't, run '. ~/.bashrc' or 'source ~/.bashrc' in your terminal. Then, proceed bootstrapping the snapshot via the steps provided in the README."
++echo "o If you haven't already created a key, use utils/key/create.sh or utils/key/import.sh to create or import a private key."
++echo "o Optional: use utils/service/install.sh to install the node as a service (will be named $BINARY_NAME)."
++echo "o When ready, turn on your node using '$BINARY_NAME start' or as a service: 'systemctl start $BINARY_NAME' (use 'journalctl -fu $BINARY_NAME -ocat' to see the service logs)."
+diff --git a/setup/state-sync.sh b/setup/state-sync.sh
+new file mode 100644
+index 00000000..3ba41dfe
+--- /dev/null
++++ b/setup/state-sync.sh
+@@ -0,0 +1,98 @@
++#!/bin/bash
++
++# Arguments check
++if [ -z "$1" ]; then
++    echo ""
++    echo "Usage: sh $0 <moniker>"
++    echo ""
++    exit 1
++fi
++
++cat <<"EOF"
++
++  /$$$$$$                                          /$$                 /$$         /$$       
++ /$$__  $$                                        |__/                | $$       /$$$$       
++| $$  \__/  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$ /$$  /$$$$$$$      | $$      |_  $$       
++| $$ /$$$$ /$$__  $$| $$__  $$ /$$__  $$ /$$_____/| $$ /$$_____/      | $$        | $$       
++| $$|_  $$| $$$$$$$$| $$  \ $$| $$$$$$$$|  $$$$$$ | $$|  $$$$$$       | $$        | $$       
++| $$  \ $$| $$_____/| $$  | $$| $$_____/ \____  $$| $$ \____  $$      | $$        | $$       
++|  $$$$$$/|  $$$$$$$| $$  | $$|  $$$$$$$ /$$$$$$$/| $$ /$$$$$$$/      | $$$$$$$$ /$$$$$$     
++ \______/  \_______/|__/  |__/ \_______/|_______/ |__/|_______/       |________/|______/     
++                                                                                             
++Welcome to the decentralized blockchain Renaissance, above money & beyond cryptocurrency!
++EOF
++
++echo ""
++echo "This script is intended for those who would like to join the mainnet using State Sync."
++echo "State Sync allows a node to join a network in a matter of minutes/hours, without having"
++echo "to worry about needing a lot of free disk space."
++echo ""
++echo "While this is favorable for the individual validator, it isn't necessarly from a broader"
++echo "network perspective since you do not have the entire history of the blockchain recorded."
++echo "So take this into consideration when deciding to state sync or not."
++echo ""
++echo "WARNING: Any config files will get overwritten and the data folder shall be removed, but there"
++echo "will be a backup and restore of the priv_validator_state.json file. If needed, use"
++echo "utils/backup/create.sh to create a backup."
++echo ""
++read -p "Do you want to continue? (y/N): " ANSWER
++
++ANSWER=$(echo "$ANSWER" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$ANSWER" != "y" ]; then
++    echo "Aborted."
++    exit 1
++fi
++
++# Root of the current repository
++REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the variables file
++. "$REPO_ROOT/utils/_variables.sh"
++
++# Arguments
++MONIKER=$1
++
++# Stop processes
++systemctl stop $BINARY_NAME
++
++# cd to root of the repository
++cd $REPO_ROOT
++
++# System update and installation of dependencies
++. ./setup/dependencies.sh
++
++# Building binaries
++go mod tidy
++make install
++
++# Set chain-id
++$BINARY_NAME config chain-id $CHAIN_ID
++
++# Init node
++$BINARY_NAME init $MONIKER --chain-id $CHAIN_ID -o
++
++# Chain specific configurations (i.e. timeout_commit 10s, min gas price 50gel)
++cp "./configs/default_app.toml" $CONFIG_DIR/app.toml
++cp "./configs/default_config.toml" $CONFIG_DIR/config.toml
++# Set moniker again since the configs got overwritten
++sed -i "s/moniker = .*/moniker = \"$MONIKER\"/" $CONFIG_DIR/config.toml
++
++# Fetch latest seeds and peers list from genesis-parameters repo
++sh ./utils/fetch/peers.sh
++
++# Fetch state file from genesis-parameters repo
++sh ./utils/fetch/state.sh
++
++# Fetch latest rpc_servers from genesis-parameters repo
++sh ./utils/fetch/rpcs.sh
++
++# Install service (commented out)
++# sh ./utils/service/install.sh
++
++# Recalibrate state sync
++if sh ./utils/tools/restate-sync.sh; then
++    echo ""
++    echo "PS: if you're unable to access the $BINARY_NAME command, run '. ~/.bashrc' or 'source ~/.bashrc'."
++    echo "Optional: use utils/service/install.sh to install the node as a service (will be named $BINARY_NAME)."
++fi
+diff --git a/setup/upgrade.sh b/setup/upgrade.sh
+new file mode 100644
+index 00000000..97caa2da
+--- /dev/null
++++ b/setup/upgrade.sh
+@@ -0,0 +1,91 @@
++#!/bin/bash
++
++cat <<"EOF"
++
++  /$$$$$$                                          /$$                 /$$         /$$       
++ /$$__  $$                                        |__/                | $$       /$$$$       
++| $$  \__/  /$$$$$$  /$$$$$$$   /$$$$$$   /$$$$$$$ /$$  /$$$$$$$      | $$      |_  $$       
++| $$ /$$$$ /$$__  $$| $$__  $$ /$$__  $$ /$$_____/| $$ /$$_____/      | $$        | $$       
++| $$|_  $$| $$$$$$$$| $$  \ $$| $$$$$$$$|  $$$$$$ | $$|  $$$$$$       | $$        | $$       
++| $$  \ $$| $$_____/| $$  | $$| $$_____/ \____  $$| $$ \____  $$      | $$        | $$       
++|  $$$$$$/|  $$$$$$$| $$  | $$|  $$$$$$$ /$$$$$$$/| $$ /$$$$$$$/      | $$$$$$$$ /$$$$$$     
++ \______/  \_______/|__/  |__/ \_______/|_______/ |__/|_______/       |________/|______/     
++                                                                                             
++EOF
++
++echo ""
++echo "This script should only be used if you run a full-node and have to perform the plan_crypto"
++echo "upgrade! This means you are currently operating on the Evmos fork of GenesisL1 and the node"
++echo "synced till the height that caused it to panic."
++echo ""
++echo "If this is not the case AND you wish to run a full-node, then head on over to GenesisL1's"
++echo "Evmos repository and follow the instructions over there."
++echo ""
++read -p "Do you want to continue? (y/N): " ANSWER
++
++ANSWER=$(echo "$ANSWER" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$ANSWER" != "y" ]; then
++    echo "Aborted."
++    exit 1
++fi
++
++# Root of the current repository
++REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the variables file
++. "$REPO_ROOT/utils/_variables.sh"
++
++# Stop services
++systemctl stop $BINARY_NAME
++
++# cd to root of the repository
++cd $REPO_ROOT
++
++# System update and installation of dependencies
++. ./setup/dependencies.sh
++
++# Rename .genesisd to .genesis if applicable (which we used in the past)
++GENESISD_DIR="$HOME/.genesisd"
++if [ ! -d "$NODE_DIR" ] && [ -d "$GENESISD_DIR" ]; then
++    mv "$GENESISD_DIR" "$NODE_DIR"
++    echo "Renamed .genesisd to .genesis."
++fi
++
++# Create a backup of old config files
++cp $CONFIG_DIR/app.toml $CONFIG_DIR/app.toml.bak
++cp $CONFIG_DIR/config.toml $CONFIG_DIR/config.toml.bak
++
++# Backup moniker and pruning settings
++MONIKER=$(grep "^moniker =" "$CONFIG_DIR/config.toml")
++PRUNING=$(grep "^pruning =" "$CONFIG_DIR/app.toml")
++PRUNING_KEEP_RECENT=$(grep "^pruning-keep-recent =" "$CONFIG_DIR/app.toml")
++#pruning-keep-every got deprecated
++PRUNING_INTERVAL=$(grep "^pruning-interval =" "$CONFIG_DIR/app.toml")
++
++# Introduce new config files
++cp ./configs/default_app.toml $CONFIG_DIR/app.toml
++cp ./configs/default_config.toml $CONFIG_DIR/config.toml
++
++# Restore moniker and pruning settings
++sed -i "s|^.*moniker =.*$|$MONIKER|" $CONFIG_DIR/config.toml
++sed -i "s|^.*pruning =.*$|$PRUNING|" $CONFIG_DIR/app.toml
++sed -i "s|^.*pruning-keep-recent =.*$|$PRUNING_KEEP_RECENT|" $CONFIG_DIR/app.toml
++#pruning-keep-every got deprecated
++sed -i "s|^.*pruning-interval =.*$|$PRUNING_INTERVAL|" $CONFIG_DIR/app.toml
++
++# Fetch latest seeds and peers list from genesis-parameters repo
++sh ./utils/fetch/peers.sh
++
++# Install binaries
++go mod tidy
++make install && {
++    echo ""
++    echo "Upgrade was a success!"
++    echo ""
++    echo "The config.toml and app.toml file have been replaced by newer variants."
++    echo "A backup under the name app.toml.bak and config.toml.bak are available if"
++    echo "you ever need to restore some of your previous settings."
++    echo ""
++    echo "When ready, turn on your node again using '$BINARY_NAME start' or 'systemctl start $BINARY_NAME'!"
++}
+diff --git a/utils/.install/.config b/utils/.install/.config
+new file mode 100644
+index 00000000..5d043115
+--- /dev/null
++++ b/utils/.install/.config
+@@ -0,0 +1 @@
++version=main
+diff --git a/utils/.install/.versionmap b/utils/.install/.versionmap
+new file mode 100644
+index 00000000..78cfcf4d
+--- /dev/null
++++ b/utils/.install/.versionmap
+@@ -0,0 +1,20 @@
++.install/updater.sh v1.0.0 r
++.install/_variables.sh.example v1.0.1 a
++backup/create.sh v1.0.0 u
++backup/README.md v1.0.0 d
++fetch/peers.sh v1.0.0 u
++fetch/rpcs.sh v1.0.0 u
++fetch/state.sh v1.0.0 u
++fetch/README.md v1.0.1 d
++info/my-peer.sh v1.0.0 u
++info/README.md v1.0.1 d
++key/create.sh v1.0.0 u
++key/import.sh v1.0.0 u
++key/README.md v1.0.0 d
++service/install.sh v1.0.0 u
++service/uninstall.sh v1.0.0 u
++service/README.md v1.0.1 d
++tools/restate-sync.sh v1.0.1b u
++tools/port-shifter.sh v1.0.1b u
++tools/README.md v1.0.1 d
++LICENSE v1.0.0 a
+diff --git a/utils/.install/_variables.sh.example b/utils/.install/_variables.sh.example
+new file mode 100644
+index 00000000..c3ef7e57
+--- /dev/null
++++ b/utils/.install/_variables.sh.example
+@@ -0,0 +1,28 @@
++#!/bin/bash
++
++# This is an example.
++# Create a _variables.sh file in the root and add these variables to allow the scripts to work their magic.
++
++# Variables for all modules
++CHAIN_ID=genesis_29-2
++BINARY_NAME=genesisd
++NODE_DIR_NAME=.genesis
++NODE_DIR=$HOME/$NODE_DIR_NAME
++CONFIG_DIR=$NODE_DIR/config
++DATA_DIR=$NODE_DIR/data
++
++# /fetch module variables.
++# Adviced is to create a repo containing a genesis.json, seeds.txt, peers.txt and rpc_servers.txt file.
++# See: https://github.com/zenodeapp/genesis-parameters/tree/main/genesis_29-2 for an example.
++FETCH_URL=https://raw.githubusercontent.com/zenodeapp/genesis-parameters/main/$CHAIN_ID
++SEEDS_URL=$FETCH_URL/seeds.txt
++PEERS_URL=$FETCH_URL/peers.txt
++STATE_URL=$FETCH_URL/genesis.json
++RPC_SERVERS_URL=$FETCH_URL/rpc_servers.txt
++
++# /info module variables.
++IP_INFO_PROVIDER=ipinfo.io/ip
++
++# /service module variables.
++SERVICE_DIR=$(cd "$(dirname "$0")"/../.. && pwd)/services # Where the service file is located, this example points two directories back based on /service/* (e.g. /service/install.sh/../../services).
++SERVICE_FILE=$BINARY_NAME.service
+diff --git a/utils/.install/updater.sh b/utils/.install/updater.sh
+new file mode 100644
+index 00000000..84010b52
+--- /dev/null
++++ b/utils/.install/updater.sh
+@@ -0,0 +1,274 @@
++#!/bin/bash
++
++UPDATER_VERSION=v1.0.0
++
++usage() {
++    echo "COSMOS UTILS UPGRADER"
++    echo ""
++    echo "The upgrader is set to use tag/commit/branch '$VERSION' (add the flag \e[3m--version [tag|commit|branch]\e[0m to change this)."
++    echo ""
++    echo "CAUTION: running this will regenerate the README.md, if you made any custom changes, make sure to create a backup before continuing."
++    echo ""
++    read -p "Do you want to perform the upgrade using '$VERSION'? (y/N): " RESPONSE
++}
++
++usageInstall() {
++    echo "COSMOS UTILS INSTALLER"
++    echo ""
++    echo "This will install the Cosmos Utilities from https://github.com/zenodeapp/cosmos-utils using tag/commit/branch '$VERSION' (add the flag \e[3m--version [tag|commit|branch]\e[0m to change this)."
++    echo "The user will be able to choose which utilities will be downloaded and which won't."
++    echo ""
++    read -p "Do you want to install using '$VERSION'? (y/N): " RESPONSE
++}
++
++# Function to prompt the user for a yes/no answer (defaults to yes)
++askYesNo() {
++    local ANSWER
++    ( exec </dev/tty && read -p "$1 (Y/n): " ANSWER && case $ANSWER in
++        [Yy]* ) return 0;;
++        [Nn]* ) return 1;;
++        * ) return 0;;
++    esac )
++}
++
++# Root of repository
++ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++RESET=false
++
++# Parse command-line arguments
++while [ $# -gt 0 ]; do
++    case "$1" in
++        --version)
++            shift
++            if [ $# -gt 0 ]; then
++                VERSION="$1"
++            else
++                echo "Error: --version option requires a value."
++                exit 1
++            fi
++            ;;
++        --reset)
++            RESET=true
++            ;;
++        *)
++            echo "Unknown option: $1"
++            exit 1
++            ;;
++    esac
++    shift
++done
++
++# Get version from config
++CONFIG=$ROOT/.install/.config
++
++# Default version if not provided
++if [ -z "$VERSION" ]; then
++    if [ -e "$CONFIG" ]; then
++        line=$(grep "^version=" "$CONFIG")
++
++        if [ -n "$line" ]; then
++            VERSION=$(echo "$line" | cut -d '=' -f 2)
++        fi
++    fi
++else
++    # Add version to .config file
++    echo "version=$VERSION" > "$CONFIG"
++fi
++
++if [ -z "$VERSION" ]; then
++    VERSION=main
++fi
++
++if $RESET; then
++    usageInstall
++else
++    usage
++fi
++
++RESPONSE=$(echo "$RESPONSE" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$RESPONSE" != "y" ]; then
++    echo "Aborted. Make the necessary changes in the $CONFIG file before continuing."
++    exit 1
++fi
++
++# Variables
++REPO="https://raw.githubusercontent.com/zenodeapp/cosmos-utils/$VERSION"
++REPO_VERSION_MAP="$REPO/.install/.versionmap"
++LOCAL_VERSION_MAP="$ROOT/.install/.versionmap"
++REMOTE_VERSION_MAP="$ROOT/.install/.versionmap.remote"
++NEW_VERSION_MAP="$ROOT/.install/.versionmap.new"
++EXCLUDE=""
++CHANGE_MADE=false
++UPGRADE_FOUND=false
++
++# Function to perform cleanup
++cleanup() {
++    rm -r "$REMOTE_VERSION_MAP" "$NEW_VERSION_MAP" "$ROOT/.readme" > /dev/null 2>&1
++}
++
++# Clean up temporary files
++cleanup
++
++# Set up trap to call cleanup function on SIGINT (Ctrl+C)
++trap 'cleanup; echo; exit 1' INT
++
++# Download necessary files for readme alterations
++mkdir -p "$ROOT/.readme"
++wget --no-cache -qO- "$REPO/.readme/generate.sh" > $ROOT/.readme/generate.sh
++wget --no-cache -qO- "$REPO/.readme/filter.sh" > $ROOT/.readme/filter.sh
++wget --no-cache -qO- "$REPO/.readme/template-installed.md" > $ROOT/.readme/template-installed.md
++
++# Create local versionmap if it doesn't exist
++if [ ! -e "$LOCAL_VERSION_MAP" ]; then
++    echo ".install/updater.sh $UPDATER_VERSION r" > "$LOCAL_VERSION_MAP"
++fi
++
++# Function to download a file
++downloadFile() {
++    local remote_file="$1"
++    local remote_version="$2"
++    local remote_type="$3"
++    local prompt="$4"
++    local auto_yes=$5
++
++    if $auto_yes || askYesNo "$prompt"; then
++        mkdir -p "$(dirname "$ROOT/$remote_file")"
++        wget --no-cache -q "$REPO/$remote_file" -O "$ROOT/$remote_file"
++        echo "$remote_file $remote_version $remote_type" >> "$NEW_VERSION_MAP"
++
++        case "$remote_type" in
++            d)
++                bash $ROOT/.readme/filter.sh "$ROOT/$remote_file" "$ROOT/$remote_file.tmp" "$EXCLUDE"
++                cat "$ROOT/$remote_file.tmp" > "$ROOT/$remote_file"
++                rm "$ROOT/$remote_file.tmp"
++                ;;
++            r)
++                # Custom behavior for updater.sh
++                tail -n +2 "$LOCAL_VERSION_MAP" >> "$NEW_VERSION_MAP"
++                cat $NEW_VERSION_MAP > "$LOCAL_VERSION_MAP"
++
++                # Clean up temporary files
++                cleanup
++                
++                echo "The updater.sh script has been updated. Please restart the script for changes to take effect."
++                exit 0
++                ;;
++        esac
++
++        CHANGE_MADE=true
++        return 0  # Indicates success
++    else
++        return 1  # Indicates "No" response
++    fi
++}
++
++# Download the remote version map
++mkdir -p "$(dirname "$REMOTE_VERSION_MAP")"
++wget --no-cache -qO- "$REPO_VERSION_MAP" > $REMOTE_VERSION_MAP
++
++# Compare local and remote version maps
++while IFS= read -r remote_line; do
++    remote_file=$(echo "$remote_line" | awk '{print $1}')
++    remote_version=$(echo "$remote_line" | awk '{print $2}')
++    remote_type=$(echo "$remote_line" | awk '{print $3}')
++
++    # Check if the line exists in the local version map
++    local_version=$(awk -v file="$remote_file" '$1==file {print $2}' "$LOCAL_VERSION_MAP")
++
++    next_module="${remote_file%%/*}"
++
++    if [ "$next_module" != "$current_module" ]; then
++        module_included=false
++        current_module="$next_module"
++    fi
++
++    # File is not present in local version map
++    if [ -z "$local_version" ]; then
++        if ! [ "$remote_type" = "d" ] || $module_included; then
++            # Default prompt
++            prompt="File '$remote_file' is not present locally. Do you want to download it?"
++
++            # Utility prompt
++            if [ "$remote_type" = "u" ]; then
++                prompt="New utility '$remote_file' detected. Do you want to download it?"
++            fi
++            
++            if [ "$remote_type" = "a" ] || [ "$remote_type" = "d" ]; then
++                auto_yes=true
++            else
++                auto_yes=false
++            fi
++
++            if ! downloadFile "$remote_file" "$remote_version" "$remote_type" "$prompt" $auto_yes; then
++                EXCLUDE="$EXCLUDE,$remote_file"
++            else
++                module_included=true
++            fi
++        fi
++    else
++        if [ "$local_version" != "$remote_version" ]; then
++            # Default prompt
++            prompt="Different version found for '$remote_file' (current: $local_version). Do you want to update to $remote_version?"
++
++            UPGRADE_FOUND=true
++           
++            # Versions differ
++            if ! downloadFile "$remote_file" "$remote_version" "$remote_type" "$prompt" false; then
++                echo "$remote_file $local_version $remote_type" >> "$NEW_VERSION_MAP"
++            fi
++        else
++            echo "$remote_file $remote_version $remote_type" >> "$NEW_VERSION_MAP"
++        fi
++    fi
++done < $REMOTE_VERSION_MAP
++
++# Check for files in local version map not present in remote version map
++while IFS= read -r local_line; do
++    local_file=$(echo "$local_line" | awk '{print $1}')
++
++    # Check if the file is not present in the remote version map
++    if ! grep -q "$local_file" $REMOTE_VERSION_MAP; then
++        # File is not present in remote version map
++        if askYesNo "File '$local_file' is not present in the remote version map. Do you want to remove it?"; then
++            rm "$ROOT/$local_file"
++
++            # Check if the directory is empty and remove it
++            DIR=$(dirname "$ROOT/$local_file")
++            if [ -z "$(ls -A "$DIR")" ]; then
++                rmdir "$DIR"  # Remove the directory if it's empty
++            fi
++
++            # Exclude from readme
++            EXCLUDE="$EXCLUDE,$local_file"
++            CHANGE_MADE=true
++        else
++            # Keep the local version in the new version map
++            local_version=$(awk -v file="$local_file" '$1==file {print $2}' "$LOCAL_VERSION_MAP")
++            local_type=$(awk -v file="$local_file" '$1==file {print $3}' "$LOCAL_VERSION_MAP")
++            echo "$local_file $local_version $local_type" >> "$NEW_VERSION_MAP"
++        fi
++    fi
++done < "$LOCAL_VERSION_MAP"
++
++# Recreate the new local version map
++cat $NEW_VERSION_MAP > "$LOCAL_VERSION_MAP"
++
++if ! $CHANGE_MADE && ! $UPGRADE_FOUND; then
++  echo "Already up to date."
++elif $CHANGE_MADE; then
++  echo "Changes made successfully."
++fi
++
++# Regenerate README if change detected
++sh $ROOT/.readme/generate.sh --template "template-installed"
++
++# Add _variables.sh file if we're resetting
++if $RESET; then
++    cat "$ROOT/.install/_variables.sh.example" > "$ROOT/_variables.sh"
++    echo "$ROOT/_variables.sh was overwritten by $ROOT/.install/_variables.sh.example, make sure to adapt this accordingly."
++fi
++
++# Clean up temporary files
++cleanup
+\ No newline at end of file
+diff --git a/utils/LICENSE b/utils/LICENSE
+new file mode 100644
+index 00000000..d200b185
+--- /dev/null
++++ b/utils/LICENSE
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2024 ZENODE
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/utils/README.md b/utils/README.md
+new file mode 100644
+index 00000000..ab668ad1
+--- /dev/null
++++ b/utils/README.md
+@@ -0,0 +1,134 @@
++# Utilities
++
++This contains useful scripts for maintaining a Cosmos SDK based node setup and comes from the [`cosmos-utils`](https://github.com/zenodeapp/cosmos-utils) repository.
++
++This has been written by ZENODE and is licensed under the MIT-license (see [LICENSE](./LICENSE)).
++
++## \_variables.sh
++
++This holds all the repository-specific variables shared with most of the scripts. This makes it easier to adjust the chain-id, binary name or node directory without having to change it in a lot of different files.
++
++## /backup
++
++### [create.sh](./backup/create.sh)
++
++This script creates a backup for the current node-setup, if one existed.
++
++```
++sh backup/create.sh [backup_dir_path]
++```
++
++> _[backup_dir_path]_ is optional (defaults: to a directory in the $HOME folder with a _unique_ name based on the system's current time).
++
++## /fetch
++
++### [peers.sh](./fetch/peers.sh)
++
++This script fetches the (most recent) seeds and peers for the chain-id configured in the [\_variables.sh](./_variables.sh) file and adds it to the `seeds` and `persistent_peers` fields in the config.toml file residing in the node's directory.
++
++```
++sh fetch/peers.sh
++```
++
++### [rpcs.sh](./fetch/rpcs.sh)
++
++This script fetches the (most recent) rpc_servers (state sync) for the chain-id configured in the [\_variables.sh](./_variables.sh) file and adds it to the `rpc_servers` field in the config.toml file residing in the node's directory.
++
++```
++sh fetch/rpcs.sh
++```
++
++### [state.sh](./fetch/state.sh)
++
++This script fetches the (most recent) `genesis.json` file for the chain-id configured in the [\_variables.sh](./_variables.sh) file and places it inside of the /config-folder residing in the node's directory.
++
++```
++sh fetch/state.sh
++```
++
++## /info
++
++### [my-peer.sh](./info/my-peer.sh)
++
++This script will print out your peer-id: _node-id@ip-address:port_. This is useful for sharing your node with others so that they can add you as a persistent peer.
++
++Bear in mind that the _port_ being echo'd is extracted from the _config.toml_-file. So if you start the node on a different port without explicitly stating this in the _config.toml_-file, then the outputted port may not represent the actual port this node uses.
++
++```
++sh info/my-peer.sh
++```
++
++> Add a --local flag to echo a local IP address, instead of your (public) external address.
++
++## /key
++
++### [create.sh](./key/create.sh)
++
++This script creates a _new_ key (or prompts to overwrite one if the _alias_ already exists).
++
++```
++sh key/create.sh <key_alias>
++```
++
++### [import.sh](./key/import.sh)
++
++This script imports an _existing_ key using the provided _private Ethereum key_.
++
++```
++sh key/import.sh <key_alias> <private_eth_key>
++```
++
++## /service
++
++### [install.sh](./service/install.sh)
++
++This script installs the daemon as a service, which will automatically start the node whenever the device reboots. See the `$SERVICE_DIR` and `$SERVICE_FILE` variables in [\_variables.sh](./_variables.sh) to see which service gets installed.
++
++```
++sh service/install.sh
++```
++
++### [uninstall.sh](./service/uninstall.sh)
++
++This script uninstalls the daemon as a service. See the `$SERVICE_FILE` variable in [\_variables.sh](./_variables.sh) to see which service gets uninstalled.
++
++```
++sh service/uninstall.sh
++```
++
++## /tools
++
++### [restate-sync.sh](./tools/restate-sync.sh)
++
++> [!CAUTION]
++> Only use this if the network your node is connected to supports state-sync!
++
++This tool recalibrates your state-sync configurations to a more recent height. **WARNING: this wipes your entire data folder, but will backup and restore the priv_validator_state.json file**. It uses the script(s) from the [`restate-sync`](https://github.com/zenodeapp/restate-sync/tree/v1.0.1) repository (`v1.0.1`). If in doubt whether this is safe, you could always check the repository to see how it works.
++
++```
++sh tools/restate-sync.sh [height_interval] [rpc_server_1] [rpc_server_2]
++```
++
++> [height_interval] is optional (default: 2000). This means it will set the trust_height to: latest_height - height_interval (rounded to nearest multiple of height_interval).
++>
++> [rpc_server_1] is optional (default: first rpc server configured in your config.toml file). If there is no rpc server configured, the script will abort.
++>
++> [rpc_server_2] is optional (default: rpc_server_1).
++
++> [!NOTE]
++> Leaving the _<rpc_server>_-arguments empty will leave the rpc_servers field in your config.toml untouched.
++
++### [port-shifter.sh](./tools/port-shifter.sh)
++
++This script is useful if you quickly want to replace the ports in the `client.toml`, `config.toml` and `app.toml` files. It uses the script(s) from the [`port-shifter`](https://github.com/zenodeapp/port-shifter/tree/v1.0.1) repository (`v1.0.1`). If in doubt whether this is safe, you could always check the repository to see how it works.
++
++```
++sh tools/port-shifter.sh <port_increment_value>
++```
++
++> <port_increment_value> is how much you would like to increment the value of the ports based on the default port values.
++
++</br>
++
++<p align="right">— ZEN</p>
++<p align="right">Copyright (c) 2024 ZENODE</p>
+diff --git a/utils/_variables.sh b/utils/_variables.sh
+new file mode 100644
+index 00000000..0bd6b3fb
+--- /dev/null
++++ b/utils/_variables.sh
+@@ -0,0 +1,23 @@
++#!/bin/bash
++
++# Variables for all modules
++CHAIN_ID=genesis_29-2
++BINARY_NAME=genesisd
++NODE_DIR_NAME=.genesis
++NODE_DIR=$HOME/$NODE_DIR_NAME
++CONFIG_DIR=$NODE_DIR/config
++DATA_DIR=$NODE_DIR/data
++
++# /fetch module variables.
++FETCH_URL=https://raw.githubusercontent.com/alpha-omega-labs/genesis-parameters/main/$CHAIN_ID
++SEEDS_URL=$FETCH_URL/seeds.txt
++PEERS_URL=$FETCH_URL/peers.txt
++STATE_URL=$FETCH_URL/genesis.json
++RPC_SERVERS_URL=$FETCH_URL/rpc_servers.txt
++
++# /info module variables.
++IP_INFO_PROVIDER=ipinfo.io/ip
++
++# /service module variables.
++SERVICE_DIR=$(cd "$(dirname "$0")"/../.. && pwd)/services
++SERVICE_FILE=$BINARY_NAME.service
+diff --git a/utils/backup/README.md b/utils/backup/README.md
+new file mode 100644
+index 00000000..11e65557
+--- /dev/null
++++ b/utils/backup/README.md
+@@ -0,0 +1,11 @@
++## /backup
++
++### [create.sh](../backup/create.sh)
++
++This script creates a backup for the current node-setup, if one existed.
++
++```
++sh backup/create.sh [backup_dir_path]
++```
++
++> _[backup_dir_path]_ is optional (defaults: to a directory in the $HOME folder with a _unique_ name based on the system's current time).
+diff --git a/utils/backup/create.sh b/utils/backup/create.sh
+new file mode 100644
+index 00000000..cf9c54c6
+--- /dev/null
++++ b/utils/backup/create.sh
+@@ -0,0 +1,77 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Node directory check
++if [ ! -e "$NODE_DIR" ]; then
++    echo "No backup can be made for $NODE_DIR doesn't exist!"
++    exit 1
++fi
++
++# Arguments
++BACKUP_DIR=${1:-$HOME/""$NODE_DIR_NAME"_backup_$(date +"%Y%m%d%H%M%S")"}
++
++# Information prompt
++echo "This script will halt $BINARY_NAME and backup the $NODE_DIR folder."
++echo ""
++echo "    o Backup directory is set to: $BACKUP_DIR."
++if [ -z $1 ]; then
++    echo "      This can be changed using: sh $0 [backup_dir]"
++fi
++echo ""
++echo "If you continue, you'll be asked whether you'd want to back-up the entire"
++echo "/data folder. The choice you make won't decide whether priv_validator_state.json"
++echo "gets backed up or not, as this will always be performed."
++echo ""
++read -p "Do you want to continue? (y/N): " ANSWER
++
++ANSWER=$(echo "$ANSWER" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$ANSWER" != "y" ]; then
++    echo "Aborted."
++    exit 1
++fi
++
++# Preserve database prompt
++read -p "Do you also want to backup the database (entire /data folder)? (y/N): " PRESERVE
++
++PRESERVE=$(echo "$PRESERVE" | tr 'A-Z' 'a-z')  # Convert to lowercase
++
++if [ "$PRESERVE" = "y" ]; then
++    PRESERVE_DB=true
++    read -p "Do you want to perform the /data backup with a copy or move operation? (c/M): " COPY_MOVE
++    COPY_MOVE=$(echo "$COPY_MOVE" | tr 'A-Z' 'a-z')  # Convert to lowercase
++else
++    PRESERVE_DB=false
++fi
++
++# Stop processes
++systemctl stop $BINARY_NAME
++
++# Backup of previous configuration if one existed
++rsync -qr --verbose --exclude 'data' --exclude 'config/genesis.json' "$NODE_DIR"/ "$BACKUP_DIR"/
++
++# Remake /data folder
++rm -r "$BACKUP_DIR"/data > /dev/null 2>&1
++mkdir -p "$BACKUP_DIR"/data
++
++# Perform /data folder operations
++if $PRESERVE_DB; then
++    if [ "$COPY_MOVE" = "c" ]; then
++        if cp -r $DATA_DIR "$BACKUP_DIR"/; then
++            echo "Backed up entire /data folder with a cp-operation."
++        fi
++    else
++        if mv $DATA_DIR "$BACKUP_DIR"/; then
++            echo "Backed up entire /data folder with a mv-operation."
++        fi
++    fi
++else
++    if cp "$DATA_DIR"/priv_validator_state.json "$BACKUP_DIR"/data/priv_validator_state.json; then
++        echo "Backed up previous priv_validator_state.json file."
++    fi
++fi
++
++# Echo result
++echo "$NODE_DIR was backed up to to $BACKUP_DIR."
+\ No newline at end of file
+diff --git a/utils/fetch/README.md b/utils/fetch/README.md
+new file mode 100644
+index 00000000..3c1bc390
+--- /dev/null
++++ b/utils/fetch/README.md
+@@ -0,0 +1,25 @@
++## /fetch
++
++### [peers.sh](../fetch/peers.sh)
++
++This script fetches the (most recent) seeds and peers for the chain-id configured in the [\_variables.sh](../_variables.sh) file and adds it to the `seeds` and `persistent_peers` fields in the config.toml file residing in the node's directory.
++
++```
++sh fetch/peers.sh
++```
++
++### [rpcs.sh](../fetch/rpcs.sh)
++
++This script fetches the (most recent) rpc_servers (state sync) for the chain-id configured in the [\_variables.sh](../_variables.sh) file and adds it to the `rpc_servers` field in the config.toml file residing in the node's directory.
++
++```
++sh fetch/rpcs.sh
++```
++
++### [state.sh](../fetch/state.sh)
++
++This script fetches the (most recent) `genesis.json` file for the chain-id configured in the [\_variables.sh](../_variables.sh) file and places it inside of the /config-folder residing in the node's directory.
++
++```
++sh fetch/state.sh
++```
+diff --git a/utils/fetch/peers.sh b/utils/fetch/peers.sh
+new file mode 100644
+index 00000000..3a7168e5
+--- /dev/null
++++ b/utils/fetch/peers.sh
+@@ -0,0 +1,16 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Fetch latest seeds and peers
++SEEDS=$(wget -qO - $SEEDS_URL | head -n 1)
++PERSISTENT_PEERS=$(wget -qO - $PEERS_URL | head -n 1)
++
++# Add latest seeds and peers to the config.toml file
++sed -i "s#seeds = .*#seeds = $SEEDS#" "$CONFIG_DIR/config.toml"
++sed -i "s#persistent_peers = .*#persistent_peers = $PERSISTENT_PEERS#" "$CONFIG_DIR/config.toml"
++
++# Echo result
++echo "Added seeds = $SEEDS"
++echo "Added persistent_peers = $PERSISTENT_PEERS"
+\ No newline at end of file
+diff --git a/utils/fetch/rpcs.sh b/utils/fetch/rpcs.sh
+new file mode 100644
+index 00000000..2881be17
+--- /dev/null
++++ b/utils/fetch/rpcs.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Fetch latest rpc_servers
++RPC_SERVERS=$(wget -qO - $RPC_SERVERS_URL | head -n 1)
++
++if [ -z "$RPC_SERVERS" ] || [ "$RPC_SERVERS" = '""' ]; then
++    # Echo result
++    echo "No rpc_servers found."
++else
++    # Add latest rpc_servers to the config.toml file
++    sed -i "s#rpc_servers = .*#rpc_servers = $RPC_SERVERS#" "$CONFIG_DIR/config.toml"
++
++    # Echo result
++    echo "Added rpc_servers = $RPC_SERVERS"
++fi
+\ No newline at end of file
+diff --git a/utils/fetch/state.sh b/utils/fetch/state.sh
+new file mode 100644
+index 00000000..d64efd8d
+--- /dev/null
++++ b/utils/fetch/state.sh
+@@ -0,0 +1,10 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Fetch genesis.json
++wget -qO "$CONFIG_DIR/genesis.json" $STATE_URL
++
++# Echo result
++echo "Added genesis.json file to $CONFIG_DIR"
+\ No newline at end of file
+diff --git a/utils/info/README.md b/utils/info/README.md
+new file mode 100644
+index 00000000..38d3c6dc
+--- /dev/null
++++ b/utils/info/README.md
+@@ -0,0 +1,13 @@
++## /info
++
++### [my-peer.sh](../info/my-peer.sh)
++
++This script will print out your peer-id: _node-id@ip-address:port_. This is useful for sharing your node with others so that they can add you as a persistent peer.
++
++Bear in mind that the _port_ being echo'd is extracted from the _config.toml_-file. So if you start the node on a different port without explicitly stating this in the _config.toml_-file, then the outputted port may not represent the actual port this node uses.
++
++```
++sh info/my-peer.sh
++```
++
++> Add a --local flag to echo a local IP address, instead of your (public) external address.
+diff --git a/utils/info/my-peer.sh b/utils/info/my-peer.sh
+new file mode 100644
+index 00000000..d09cce43
+--- /dev/null
++++ b/utils/info/my-peer.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# IP addresss
++if [ "$1" = "--local" ]; then
++    IP_ADDRESS="127.0.0.1"
++else
++    IP_ADDRESS=$(curl -s $IP_INFO_PROVIDER)
++fi
++
++# Find port of laddr in [p2p] section of config.toml
++PORT=$(grep -E "^\[p2p\]" -A 1000 $CONFIG_DIR/config.toml | grep "laddr = " | cut -d':' -f3 | cut -d'"' -f1 | head -n 1)
++
++# Echo node_id@ip_address:port
++echo "$($BINARY_NAME tendermint show-node-id)@$IP_ADDRESS:$PORT"
+\ No newline at end of file
+diff --git a/utils/key/README.md b/utils/key/README.md
+new file mode 100644
+index 00000000..e064b48e
+--- /dev/null
++++ b/utils/key/README.md
+@@ -0,0 +1,17 @@
++## /key
++
++### [create.sh](../key/create.sh)
++
++This script creates a _new_ key (or prompts to overwrite one if the _alias_ already exists).
++
++```
++sh key/create.sh <key_alias>
++```
++
++### [import.sh](../key/import.sh)
++
++This script imports an _existing_ key using the provided _private Ethereum key_.
++
++```
++sh key/import.sh <key_alias> <private_eth_key>
++```
+diff --git a/utils/key/create.sh b/utils/key/create.sh
+new file mode 100644
+index 00000000..2b2ec53e
+--- /dev/null
++++ b/utils/key/create.sh
+@@ -0,0 +1,17 @@
++#!/bin/bash
++
++# Arguments check
++if [ -z "$1" ]; then
++    echo "Usage: sh $0 <key_alias>"
++    exit 1
++fi
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Arguments
++KEY_ALIAS=$1
++
++# Create key
++$BINARY_NAME config keyring-backend os
++$BINARY_NAME keys add $KEY_ALIAS --keyring-backend os --algo eth_secp256k1
+\ No newline at end of file
+diff --git a/utils/key/import.sh b/utils/key/import.sh
+new file mode 100644
+index 00000000..9e1edd1a
+--- /dev/null
++++ b/utils/key/import.sh
+@@ -0,0 +1,18 @@
++#!/bin/bash
++
++# Arguments check
++if [ -z "$1" ] || [ -z "$2" ]; then
++    echo "Usage: sh $0 <key_alias> <private_eth_key>"
++    exit 1
++fi
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Arguments
++KEY_ALIAS=$1
++PRIVATE_ETH_KEY=$2
++
++# Import key
++$BINARY_NAME config keyring-backend os
++$BINARY_NAME keys unsafe-import-eth-key $KEY_ALIAS $PRIVATE_ETH_KEY --keyring-backend os
+\ No newline at end of file
+diff --git a/utils/service/README.md b/utils/service/README.md
+new file mode 100644
+index 00000000..d57278cc
+--- /dev/null
++++ b/utils/service/README.md
+@@ -0,0 +1,17 @@
++## /service
++
++### [install.sh](../service/install.sh)
++
++This script installs the daemon as a service, which will automatically start the node whenever the device reboots. See the `$SERVICE_DIR` and `$SERVICE_FILE` variables in [\_variables.sh](../_variables.sh) to see which service gets installed.
++
++```
++sh service/install.sh
++```
++
++### [uninstall.sh](../service/uninstall.sh)
++
++This script uninstalls the daemon as a service. See the `$SERVICE_FILE` variable in [\_variables.sh](../_variables.sh) to see which service gets uninstalled.
++
++```
++sh service/uninstall.sh
++```
+diff --git a/utils/service/install.sh b/utils/service/install.sh
+new file mode 100644
+index 00000000..0b4840b7
+--- /dev/null
++++ b/utils/service/install.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Stop service if it exists
++systemctl stop $SERVICE_FILE
++
++# Install service
++cp $SERVICE_DIR/$SERVICE_FILE /etc/systemd/system/$SERVICE_FILE
++systemctl daemon-reload
++systemctl enable $SERVICE_FILE
+\ No newline at end of file
+diff --git a/utils/service/uninstall.sh b/utils/service/uninstall.sh
+new file mode 100644
+index 00000000..5484a917
+--- /dev/null
++++ b/utils/service/uninstall.sh
+@@ -0,0 +1,12 @@
++#!/bin/bash
++
++# Source the _variables.sh file
++. "$(cd "$(dirname "$0")"/.. && pwd)/_variables.sh"
++
++# Stop service if it exists
++systemctl stop $SERVICE_FILE
++
++# Uninstall service
++systemctl disable $SERVICE_FILE
++rm /etc/systemd/system/$SERVICE_FILE
++systemctl daemon-reload
+\ No newline at end of file
+diff --git a/utils/tools/README.md b/utils/tools/README.md
+new file mode 100644
+index 00000000..c003b0cc
+--- /dev/null
++++ b/utils/tools/README.md
+@@ -0,0 +1,31 @@
++## /tools
++
++### [restate-sync.sh](../tools/restate-sync.sh)
++
++> [!CAUTION]
++> Only use this if the network your node is connected to supports state-sync!
++
++This tool recalibrates your state-sync configurations to a more recent height. **WARNING: this wipes your entire data folder, but will backup and restore the priv_validator_state.json file**. It uses the script(s) from the [`restate-sync`](https://github.com/zenodeapp/restate-sync/tree/v1.0.1) repository (`v1.0.1`). If in doubt whether this is safe, you could always check the repository to see how it works.
++
++```
++sh tools/restate-sync.sh [height_interval] [rpc_server_1] [rpc_server_2]
++```
++
++> [height_interval] is optional (default: 2000). This means it will set the trust_height to: latest_height - height_interval (rounded to nearest multiple of height_interval).
++>
++> [rpc_server_1] is optional (default: first rpc server configured in your config.toml file). If there is no rpc server configured, the script will abort.
++>
++> [rpc_server_2] is optional (default: rpc_server_1).
++
++> [!NOTE]
++> Leaving the _<rpc_server>_-arguments empty will leave the rpc_servers field in your config.toml untouched.
++
++### [port-shifter.sh](../tools/port-shifter.sh)
++
++This script is useful if you quickly want to replace the ports in the `client.toml`, `config.toml` and `app.toml` files. It uses the script(s) from the [`port-shifter`](https://github.com/zenodeapp/port-shifter/tree/v1.0.1) repository (`v1.0.1`). If in doubt whether this is safe, you could always check the repository to see how it works.
++
++```
++sh tools/port-shifter.sh <port_increment_value>
++```
++
++> <port_increment_value> is how much you would like to increment the value of the ports based on the default port values.
+diff --git a/utils/tools/port-shifter.sh b/utils/tools/port-shifter.sh
+new file mode 100644
+index 00000000..405236c3
+--- /dev/null
++++ b/utils/tools/port-shifter.sh
+@@ -0,0 +1,37 @@
++#!/bin/bash
++
++# PORT SHIFTER for client.toml, app.toml and config.toml files (Wrapper variant)
++# Original: https://github.com/zenodeapp/port-shifter
++# ZENODE (https://zenode.app)
++
++# Root of repository
++ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the _variables.sh file
++. "$ROOT/_variables.sh"
++
++# Where the downloaded script has to be saved
++SAVE_AS="$ROOT/tools/_port-shifter.sh"
++
++# Repository where the port shifter resides
++VERSION=v1.0.1 # Added versioning for non-breaking changes and security measures
++EXTERNAL_REPO=https://raw.githubusercontent.com/zenodeapp/port-shifter/$VERSION
++
++# quick-shift.sh (simple variant, $1 is <port_increment_value>, e.g.: 1000)
++# See https://github.com/zenodeapp/port-shifter/blob/v1.0.1/quick-shift.sh
++wget -O $SAVE_AS $EXTERNAL_REPO/quick-shift.sh >/dev/null 2>&1
++# shift-wizard.sh (more advanced, if you prefer to edit individual ports)
++# See: https://github.com/zenodeapp/port-shifter/blob/v1.0.1/shift-wizard.sh
++# wget -O $SAVE_AS $EXTERNAL_REPO/shift-wizard.sh
++
++# Execute script
++sh $SAVE_AS "$CONFIG_DIR" $1
++
++# Capture the exit status of the script execution
++RESULT=$?
++
++# Cleanup
++rm $SAVE_AS
++
++# Exit the script with the captured exit status, indicating success (0) or failure (non-zero)
++exit $RESULT
+diff --git a/utils/tools/restate-sync.sh b/utils/tools/restate-sync.sh
+new file mode 100644
+index 00000000..ce29412c
+--- /dev/null
++++ b/utils/tools/restate-sync.sh
+@@ -0,0 +1,38 @@
++#!/bin/bash
++
++# RESTATE SYNC for recalibrating to a more recent height (Wrapper variant)
++# Original: https://github.com/zenodeapp/restate-sync
++# ZENODE (https://zenode.app)
++
++# $1 is [height_interval] (default: 2000)
++# $2 is [rpc_server_1] (default: the first rpc configured in rpc_servers)
++# $3 is [rpc_server_2] (default: [rpc_server_1])
++
++# Root of repository
++ROOT=$(cd "$(dirname "$0")"/.. && pwd)
++
++# Source the _variables.sh file
++. "$ROOT/_variables.sh"
++
++# Where the downloaded script has to be saved
++SAVE_AS="$ROOT/tools/_restate-sync.sh"
++
++# Repository where the port shifter resides
++VERSION=v1.0.1 # Added versioning for non-breaking changes and security measures
++EXTERNAL_REPO=https://raw.githubusercontent.com/zenodeapp/restate-sync/$VERSION
++
++# restate-sync.sh
++# See https://github.com/zenodeapp/restate-sync/blob/v1.0.1/restate-sync.sh
++wget -O $SAVE_AS $EXTERNAL_REPO/restate-sync.sh >/dev/null 2>&1
++
++# Execute script
++sh $SAVE_AS "$BINARY_NAME" "$NODE_DIR_NAME" "$1" "$2" "$3"
++
++# Capture the exit status of the script execution
++RESULT=$?
++
++# Cleanup
++rm $SAVE_AS
++
++# Exit the script with the captured exit status, indicating success (0) or failure (non-zero)
++exit $RESULT

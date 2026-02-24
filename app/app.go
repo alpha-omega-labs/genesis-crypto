@@ -95,6 +95,7 @@ import (
 	"cosmossdk.io/x/upgrade"
 	upgradekeeper "cosmossdk.io/x/upgrade/keeper"
 	upgradetypes "cosmossdk.io/x/upgrade/types"
+	sdkmath "cosmossdk.io/math"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	"github.com/cosmos/cosmos-sdk/client"
@@ -164,7 +165,7 @@ import (
 )
 
 const (
-	Name = "cronos"
+	Name = "genesis"
 
 	// AddrLen is the allowed length (in bytes) for an address.
 	//
@@ -228,6 +229,7 @@ func init() {
 	}
 
 	DefaultNodeHome = filepath.Join(userHomeDir, "."+Name)
+	sdk.DefaultPowerReduction = sdkmath.NewIntFromUint64(1000000000000000000)
 }
 
 func StoreKeys() (
