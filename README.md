@@ -24,8 +24,10 @@
 
 Due to the recent on-chain minting of the full Protein Data Bank (PDB), the size of the GenesisL1 blockchain has increased significantly. This data-heavy event resulted in a substantial boost to storage requirements and syncing time. To address this, the GenesisL1 community provides multiple streamlined methods to get a node up and running quickly — including a bootstrapped `data` folder backup that allows syncing within hours instead of several days.
 
+Long-form operational docs now start in [`docs/README.md`](docs/README.md). New operators who want a docs-first flow can use the [`node operator guide`](docs/node-operator-guide.md) for setup-path selection, host preparation, bootstrap, upgrade, service, and validator handoff notes.
+
 > ⚠️ **IMPORTANT:**
-> In **Step 2**, you will need to choone **one setup methods**: Option A or B.
+> In **Step 2**, you will need to choose **one setup method**: Option A or B.
 
 This repository is intended for those who want to join the Cronos-fork **mainnet**: `genesis_29-2`, using one of the following paths:
 
@@ -410,7 +412,7 @@ genesisd tx staking create-validator \
 ## 7. Explore utilities
 
 > [!TIP]
-> The [/utils](/utils)-folder contains useful utilities one could use to manage their node (e.g. for fetching latest seeds and peers, fetching the genesis state, quickly shifting your config's ports, recalibrating your state sync etc.). To learn more about these, see the [README](utils/README.md) in the folder.
+> The [`utils`](utils/README.md) folder contains useful utilities one could use to manage their node (e.g. for fetching latest seeds and peers, fetching the genesis state, quickly shifting your config's ports, recalibrating your state sync etc.). To learn more about these, see the [README](utils/README.md) in the folder.
 
 ---
 
