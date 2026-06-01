@@ -42,21 +42,21 @@ builtins.listToAttrs (
     { network, pkgtype }:
     {
       name = builtins.concatStringsSep "-" (
-        [ "cronosd" ]
+        [ "genesisd" ]
         ++ lib.optional (network != "mainnet") network
         ++ lib.optional (pkgtype != "nix") pkgtype
       );
       value =
         let
-          cronosd = callPackage ../. { inherit rev network; };
-          bundle = if stdenv.hostPlatform.isWindows then bundle-win-exe cronosd else bundle-exe cronosd;
+          genesisd = callPackage ../. { inherit rev network; };
+          bundle = if stdenv.hostPlatform.isWindows then bundle-win-exe genesisd else bundle-exe genesisd;
         in
         if pkgtype == "bundle" then
           bundle
         else if pkgtype == "tarball" then
           make-tarball bundle
         else
-          cronosd;
+          genesisd;
     }
   ) matrix
 )
