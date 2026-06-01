@@ -5,25 +5,23 @@ import (
 	"math/big"
 	"strings"
 
-	"cosmossdk.io/errors"
-	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
-	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-
-	"github.com/cometbft/cometbft/libs/log"
-
-	"github.com/cosmos/cosmos-sdk/codec"
-	"github.com/cosmos/cosmos-sdk/store/prefix"
-	storetypes "github.com/cosmos/cosmos-sdk/store/types"
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-	ibcfeetypes "github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	clienttypes "github.com/cosmos/ibc-go/v7/modules/core/02-client/types"
-	channeltypes "github.com/cosmos/ibc-go/v7/modules/core/04-channel/types"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
+	ibccallbacktypes "github.com/cosmos/ibc-go/v10/modules/apps/callbacks/types"
+	clienttypes "github.com/cosmos/ibc-go/v10/modules/core/02-client/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
 	cronosprecompiles "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper/precompiles"
 	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/common"
-	// this line is used by starport scaffolding # ibc/keeper/import
+
+	"cosmossdk.io/errors"
+	"cosmossdk.io/log"
+	"cosmossdk.io/store/prefix"
+	storetypes "cosmossdk.io/store/types"
+
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
 )
 
 type (
@@ -36,8 +34,6 @@ type (
 		bankKeeper types.BankKeeper
 		// ibc transfer operations
 		transferKeeper types.TransferKeeper
-		// gravity bridge keeper
-		gravityKeeper types.GravityKeeper
 		// ethermint evm keeper
 		evmKeeper types.EvmKeeper
 		// account keeper
@@ -51,13 +47,14 @@ type (
 	}
 )
 
+var _ ibccallbacktypes.ContractKeeper = Keeper{}
+
 func NewKeeper(
 	cdc codec.Codec,
 	storeKey,
 	memKey storetypes.StoreKey,
 	bankKeeper types.BankKeeper,
 	transferKeeper types.TransferKeeper,
-	gravityKeeper types.GravityKeeper,
 	evmKeeper types.EvmKeeper,
 	accountKeeper types.AccountKeeper,
 	authority string,
@@ -73,7 +70,6 @@ func NewKeeper(
 		memKey:         memKey,
 		bankKeeper:     bankKeeper,
 		transferKeeper: transferKeeper,
-		gravityKeeper:  gravityKeeper,
 		evmKeeper:      evmKeeper,
 		accountKeeper:  accountKeeper,
 		authority:      authority,
@@ -215,7 +211,7 @@ func (k Keeper) OnRecvVouchers(
 	}
 }
 
-func (k Keeper) GetAccount(ctx sdk.Context, addr sdk.AccAddress) authtypes.AccountI {
+func (k Keeper) GetAccount(ctx sdk.Context, addr sdk.AccAddress) sdk.AccountI {
 	return k.accountKeeper.GetAccount(ctx, addr)
 }
 
@@ -316,14 +312,10 @@ func (k Keeper) IBCOnAcknowledgementPacketCallback(
 	relayer sdk.AccAddress,
 	contractAddress,
 	packetSenderAddress string,
+	version string,
 ) error {
-	// the ack is wrapped by fee middleware
-	var ack ibcfeetypes.IncentivizedAcknowledgement
-	if err := k.cdc.UnmarshalJSON(acknowledgement, &ack); err != nil {
-		return err
-	}
 	var res channeltypes.Acknowledgement
-	if err := k.cdc.UnmarshalJSON(ack.AppAcknowledgement, &res); err != nil {
+	if err := k.cdc.UnmarshalJSON(acknowledgement, &res); err != nil {
 		return err
 	}
 	return k.onPacketResult(ctx, packet, res.Success(), relayer, contractAddress, packetSenderAddress)
@@ -335,6 +327,7 @@ func (k Keeper) IBCOnTimeoutPacketCallback(
 	relayer sdk.AccAddress,
 	contractAddress,
 	packetSenderAddress string,
+	version string,
 ) error {
 	return k.onPacketResult(ctx, packet, false, relayer, contractAddress, packetSenderAddress)
 }
@@ -344,6 +337,7 @@ func (k Keeper) IBCReceivePacketCallback(
 	packet ibcexported.PacketI,
 	ack ibcexported.Acknowledgement,
 	contractAddress string,
+	version string,
 ) error {
 	return nil
 }
@@ -357,6 +351,11 @@ func (k Keeper) IBCSendPacketCallback(
 	packetData []byte,
 	contractAddress,
 	packetSenderAddress string,
+	version string,
 ) error {
 	return nil
+}
+
+func (k Keeper) GetBlockList(ctx sdk.Context) []byte {
+	return ctx.KVStore(k.storeKey).Get(types.KeyPrefixBlockList)
 }

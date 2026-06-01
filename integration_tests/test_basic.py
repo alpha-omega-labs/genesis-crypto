@@ -2,106 +2,90 @@ import json
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 import web3
-from dateutil.parser import isoparse
 from eth_bloom import BloomFilter
 from eth_utils import abi, big_endian_to_int
 from hexbytes import HexBytes
 from pystarport import cluster, ports
+from web3 import Web3, exceptions
 
-from .cosmoscli import CosmosCLI
-from .network import Geth
+from .cosmoscli import CosmosCLI, module_address
+from .network import Geth, setup_custom_cronos
 from .utils import (
     ADDRS,
     CONTRACTS,
     KEYS,
     Greeter,
     RevertTestContract,
-    approve_proposal,
+    assert_gov_params,
     build_batch_tx,
     contract_address,
     contract_path,
     deploy_contract,
+    derive_new_account,
+    fund_acc,
+    fund_address,
+    get_expedited_params,
     get_receipts_by_block,
+    get_sync_info,
     modify_command_in_supervisor_config,
+    remove_cancun_prague_params,
     send_transaction,
     send_txs,
+    sign_transaction,
     submit_any_proposal,
+    submit_gov_proposal,
+    w3_wait_for_block,
     wait_for_block,
-    wait_for_block_time,
     wait_for_new_blocks,
     wait_for_port,
 )
 
 
-def find_log_event_attrs(logs, ev_type, cond=None):
-    for ev in logs[0]["events"]:
-        if ev["type"] == ev_type:
-            attrs = {attr["key"]: attr["value"] for attr in ev["attributes"]}
-            if cond is None or cond(attrs):
-                return attrs
-    return None
-
-
-def get_proposal_id(rsp):
-    def cb(attrs):
-        return "proposal_id" in attrs
-
-    msg = ",/cosmos.gov.v1.MsgExecLegacyContent"
-    ev = find_log_event_attrs(rsp["logs"], "submit_proposal", cb)
-    assert ev["proposal_messages"] == msg, rsp
-    return ev["proposal_id"]
-
-
-def approve_proposal_legacy(node, rsp):
-    cluster = node.cosmos_cli()
-    proposal_id = get_proposal_id(rsp)
-    proposal = cluster.query_proposal(proposal_id)
-    assert proposal["status"] == "PROPOSAL_STATUS_DEPOSIT_PERIOD", proposal
-    amount = cluster.balance(cluster.address("community"))
-    rsp = cluster.gov_deposit("community", proposal_id, "1basetcro")
-    assert rsp["code"] == 0, rsp["raw_log"]
-    proposal = cluster.query_proposal(proposal_id)
-    assert proposal["status"] == "PROPOSAL_STATUS_VOTING_PERIOD", proposal
-    for i in range(len(node.config["validators"])):
-        rsp = node.cosmos_cli(i).gov_vote("validator", proposal_id, "yes")
-        assert rsp["code"] == 0, rsp["raw_log"]
-
-    wait_for_block_time(
-        cluster, isoparse(proposal["voting_end_time"]) + timedelta(seconds=5)
-    )
-    proposal = cluster.query_proposal(proposal_id)
-    assert proposal["status"] == "PROPOSAL_STATUS_PASSED", proposal
-    return amount
-
-
-def test_ica_enabled(cronos):
+def test_ica_enabled(cronos, tmp_path):
     cli = cronos.cosmos_cli()
-    p = cli.query_icacontroller_params()
-    assert p["controller_enabled"]
-    rsp = cli.gov_propose_legacy(
-        "community",
-        "param-change",
-        {
-            "title": "Update icacontroller enabled",
-            "description": "ditto",
-            "changes": [
-                {
-                    "subspace": "icacontroller",
-                    "key": "ControllerEnabled",
-                    "value": False,
-                }
-            ],
-        },
-        mode="sync",
+    param0 = cli.query_params("gov")
+    param1 = get_expedited_params(param0)
+    # governance module account as signer
+    authority = module_address("gov")
+    msg = "/cosmos.gov.v1.MsgUpdateParams"
+    submit_gov_proposal(
+        cronos,
+        msg,
+        messages=[
+            {
+                "@type": msg,
+                "authority": authority,
+                "params": {
+                    **param0,
+                    **param1,
+                },
+            }
+        ],
     )
-    assert rsp["code"] == 0, rsp["raw_log"]
-    approve_proposal_legacy(cronos, rsp)
-    p = cli.query_icacontroller_params()
+    assert_gov_params(cli, param0)
+
+    p = cli.query_ica_params()
+    assert p["controller_enabled"]
+    p["controller_enabled"] = False
+    msg = "/ibc.applications.interchain_accounts.controller.v1.MsgUpdateParams"
+    submit_gov_proposal(
+        cronos,
+        msg,
+        messages=[
+            {
+                "@type": msg,
+                "signer": authority,
+                "params": p,
+            }
+        ],
+        deposit="5basetcro",
+        expedited=True,
+    )
+    p = cli.query_ica_params()
     assert not p["controller_enabled"]
 
 
@@ -134,7 +118,7 @@ def test_events(cluster, suspend_capture):
         w3,
         CONTRACTS["TestERC20A"],
         key=KEYS["validator"],
-        exp_gas_used=641641,
+        exp_gas_used=564532,
     )
     tx = erc20.functions.transfer(ADDRS["community"], 10).build_transaction(
         {"from": ADDRS["validator"]}
@@ -174,7 +158,7 @@ def test_minimal_gas_price(cronos):
         "to": "0x0000000000000000000000000000000000000000",
         "value": 10000,
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(exceptions.Web3RPCError):
         send_transaction(
             w3,
             {**tx, "gasPrice": 1},
@@ -192,7 +176,7 @@ def test_native_call(cronos):
     """
     test contract native call on cronos network
     - deploy test contract
-    - run native call, expect failure, becuase no native fund in contract
+    - run native call, expect failure, because no native fund in contract
     - send native tokens to contract account
     - run again, expect success and check balance
     """
@@ -247,10 +231,8 @@ def test_statesync(cronos):
     assert w3.eth.get_balance(ADDRS["community"]) == initial_balance + tx_value
 
     # Wait 5 more block (sometimes not enough blocks can not work)
-    wait_for_block(
-        cronos.cosmos_cli(0),
-        int(cronos.cosmos_cli(0).status()["SyncInfo"]["latest_block_height"]) + 5,
-    )
+    cli0 = cronos.cosmos_cli(0)
+    wait_for_block(cli0, cli0.block_height() + 5)
 
     # Check the transactions are added
     assert w3.eth.get_transaction(txhash_0) is not None
@@ -284,15 +266,13 @@ def test_statesync(cronos):
     )
     clustercli.supervisor.startProcess(f"{clustercli.chain_id}-node{i}")
     # Wait 1 more block
-    wait_for_block(
-        clustercli.cosmos_cli(i),
-        int(cronos.cosmos_cli(0).status()["SyncInfo"]["latest_block_height"]) + 1,
-    )
+    wait_for_block(clustercli.cosmos_cli(i), cli0.block_height() + 1)
+    time.sleep(1)
 
     # check query chain state works
-    assert not clustercli.status(i)["SyncInfo"]["catching_up"]
+    assert not get_sync_info(clustercli.status(i))["catching_up"]
 
-    # check query old transaction does't work
+    # check query old transaction doesn't work
     # Get we3 provider
     base_port = ports.evmrpc_port(clustercli.base_port(i))
     print("json-rpc port:", base_port)
@@ -310,13 +290,10 @@ def test_statesync(cronos):
     txhash_2 = send_transaction(w3, tx, KEYS["validator"])["transactionHash"].hex()
     txhash_3 = greeter.transfer("world")["transactionHash"].hex()
     # Wait 1 more block
-    wait_for_block(
-        clustercli.cosmos_cli(i),
-        int(cronos.cosmos_cli(0).status()["SyncInfo"]["latest_block_height"]) + 1,
-    )
+    wait_for_block(clustercli.cosmos_cli(i), cli0.block_height() + 1)
 
     # check query chain state works
-    assert not clustercli.status(i)["SyncInfo"]["catching_up"]
+    assert not get_sync_info(clustercli.status(i))["catching_up"]
 
     # check query new transaction works
     assert statesync_w3.eth.get_transaction(txhash_2) is not None
@@ -326,7 +303,7 @@ def test_statesync(cronos):
         == initial_balance + tx_value + tx_value
     )
 
-    print("succesfully syncing")
+    print("successfully syncing")
     clustercli.supervisor.stopProcess(f"{clustercli.chain_id}-node{i}")
 
 
@@ -345,11 +322,11 @@ def test_local_statesync(cronos, tmp_path_factory):
     cli0 = cronos.cosmos_cli(0)
     wait_for_block(cli0, 6)
 
-    sync_info = cli0.status()["SyncInfo"]
+    sync_info = get_sync_info(cli0.status())
     cronos.supervisorctl("stop", "cronos_777-1-node0")
     tarball = cli0.data_dir / "snapshot.tar.gz"
     height = int(sync_info["latest_block_height"])
-    # round down to multplies of memiavl.snapshot-interval
+    # round down to multiples of memiavl.snapshot-interval
     height -= height % 5
 
     if height not in set(item.height for item in cli0.list_snapshot()):
@@ -405,8 +382,12 @@ def test_local_statesync(cronos, tmp_path_factory):
         Path(home) / "config/app.toml",
         base_port,
         {
-            "store": {
-                "streamers": ["versiondb"],
+            "json-rpc": {
+                "address": f"127.0.0.1:{ports.evmrpc_port(base_port)}",
+                "ws-address": f"127.0.0.1:{ports.evmrpc_ws_port(base_port)}",
+            },
+            "versiondb": {
+                "enable": True,
             },
         },
     )
@@ -431,7 +412,7 @@ def test_local_statesync(cronos, tmp_path_factory):
         with pytest.raises(Exception) as exc_info:
             cli.distribution_community(height=height - 1)
 
-        assert "Stored fee pool should not have been nil" in exc_info.value.args[0]
+        assert "collections: not found" in exc_info.value.args[0]
 
 
 def test_transaction(cronos):
@@ -450,7 +431,7 @@ def test_transaction(cronos):
     initial_block_number = w3.eth.get_block_number()
 
     # tx already in mempool
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(exceptions.Web3RPCError) as exc:
         send_transaction(
             w3,
             {
@@ -464,7 +445,7 @@ def test_transaction(cronos):
     assert "tx already in mempool" in str(exc)
 
     # invalid sequence
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(exceptions.Web3RPCError) as exc:
         send_transaction(
             w3,
             {
@@ -478,7 +459,7 @@ def test_transaction(cronos):
     assert "invalid sequence" in str(exc)
 
     # out of gas
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(exceptions.Web3RPCError) as exc:
         send_transaction(
             w3,
             {
@@ -492,7 +473,7 @@ def test_transaction(cronos):
     assert "out of gas" in str(exc)
 
     # insufficient fee
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(exceptions.Web3RPCError) as exc:
         send_transaction(
             w3,
             {
@@ -570,6 +551,7 @@ def assert_receipt_transaction_and_block(w3, futures):
 
     block_number = w3.eth.get_block_number()
     tx_indexes = [0, 1, 2, 3]
+
     for receipt in receipts:
         # check in the same block
         assert receipt["blockNumber"] == block_number
@@ -577,6 +559,27 @@ def assert_receipt_transaction_and_block(w3, futures):
         transaction_index = receipt["transactionIndex"]
         assert transaction_index in tx_indexes
         tx_indexes.remove(transaction_index)
+
+    # check block receipts
+
+    receipts.sort(key=lambda receipt: receipt["transactionIndex"])
+    block_receipts = w3.provider.make_request("eth_getBlockReceipts", [block_number])[
+        "result"
+    ]
+    assert len(block_receipts) == 4
+    for i, block_receipt in enumerate(block_receipts):
+        assert block_receipt["blockNumber"] == hex(receipts[i]["blockNumber"])
+        assert block_receipt["transactionHash"] == Web3.to_hex(
+            receipts[i]["transactionHash"]
+        )
+        assert block_receipt["cumulativeGasUsed"] == hex(
+            receipts[i]["cumulativeGasUsed"]
+        )
+        assert block_receipt["effectiveGasPrice"] == hex(
+            receipts[i]["effectiveGasPrice"]
+        )
+        assert block_receipt["from"] == receipts[i]["from"].lower()
+        assert block_receipt["gasUsed"] == hex(receipts[i]["gasUsed"])
 
     block = w3.eth.get_block(block_number)
     # print(block)
@@ -615,7 +618,7 @@ def test_exception(cluster):
     receipt = send_transaction(
         w3, contract.functions.transfer(5 * (10**18)).build_transaction()
     )
-    assert receipt.status == 1, "should be succesfully"
+    assert receipt.status == 1, "should be successfully"
     assert 5 * (10**18) == contract.caller.query()
 
 
@@ -670,13 +673,22 @@ def test_message_call(cronos):
     assert len(receipt.logs) == iterations
 
 
-def test_suicide(cluster):
+@pytest.fixture(scope="module")
+def custom_cronos(tmp_path_factory):
+    path = tmp_path_factory.mktemp("pre_cancun")
+    # init with genesis binary
+    cfg = Path(__file__).parent / ("configs/default.jsonnet")
+    yield from setup_custom_cronos(path, 26530, cfg)
+
+
+def test_suicide_pre_cancun(custom_cronos):
     """
     test compliance of contract suicide
     - within the tx, after contract suicide, the code is still available.
     - after the tx, the code is not available.
     """
-    w3 = cluster.w3
+    remove_cancun_prague_params(custom_cronos)
+    w3 = custom_cronos.w3
     destroyee = deploy_contract(
         w3,
         contract_path("Destroyee", "TestSuicide.sol"),
@@ -695,6 +707,42 @@ def test_suicide(cluster):
     assert receipt.status == 1
 
     assert len(w3.eth.get_code(destroyee.address)) == 0
+
+
+def test_suicide_post_cancun(cluster):
+    """
+    after EIP-6780, SELFDESTRUCT will recover all funds to the target
+    but not delete the account, except when called in the same transaction as creation
+    """
+    w3 = cluster.w3
+    destroyee = deploy_contract(
+        w3,
+        contract_path("Destroyee", "TestSuicide.sol"),
+    )
+    destroyer = deploy_contract(
+        w3,
+        contract_path("Destroyer", "TestSuicide.sol"),
+    )
+
+    balance_wanted = 1000000000000000000
+    fund_acc(w3, destroyee, balance_wanted)
+    assert w3.eth.get_balance(destroyee.address) == balance_wanted
+    assert w3.eth.get_balance(destroyer.address) == 0
+
+    old_code_destroyee = w3.eth.get_code(destroyee.address)
+    old_code_destroyer = w3.eth.get_code(destroyer.address)
+    assert len(old_code_destroyee) > 0
+    assert len(old_code_destroyer) > 0
+
+    tx = destroyer.functions.check_codesize_after_suicide(
+        destroyee.address
+    ).build_transaction()
+    receipt = send_transaction(w3, tx)
+    assert receipt.status == 1
+
+    assert w3.eth.get_code(destroyee.address) == old_code_destroyee
+    assert w3.eth.get_balance(destroyee.address) == 0
+    assert w3.eth.get_balance(destroyer.address) == balance_wanted
 
 
 def test_batch_tx(cronos):
@@ -745,9 +793,12 @@ def test_batch_tx(cronos):
         == receipts[0].gasUsed + receipts[1].gasUsed + receipts[2].gasUsed
     )
 
+    # check nonce
+    assert w3.eth.get_transaction_count(sender) == nonce + 3
+
     # check traceTransaction
     rsps = [
-        w3.provider.make_request("debug_traceTransaction", [h.hex()])["result"]
+        w3.provider.make_request("debug_traceTransaction", [Web3.to_hex(h)])["result"]
         for h in tx_hashes
     ]
 
@@ -813,7 +864,8 @@ def test_failed_transfer_tx(cronos):
 
     # check traceTransaction
     rsps = [
-        w3.provider.make_request("debug_traceTransaction", [h.hex()]) for h in tx_hashes
+        w3.provider.make_request("debug_traceTransaction", [Web3.to_hex(h)])
+        for h in tx_hashes
     ]
     for rsp, receipt in zip(rsps, receipts):
         if receipt.status == 1:
@@ -821,12 +873,11 @@ def test_failed_transfer_tx(cronos):
             assert not result["failed"]
             assert receipt.gasUsed == result["gas"]
         else:
-            assert rsp["error"] == {
-                "code": -32000,
-                "message": (
-                    "rpc error: code = Internal desc = "
-                    "insufficient balance for transfer"
-                ),
+            assert rsp["result"] == {
+                "failed": True,
+                "gas": 21000,
+                "returnValue": "0x",
+                "structLogs": [],
             }
 
 
@@ -868,6 +919,7 @@ def test_contract(cronos):
 origin_cmd = None
 
 
+@pytest.mark.unmarked
 @pytest.mark.parametrize("max_gas_wanted", [80000000, 40000000, 25000000, 500000, None])
 def test_tx_inclusion(cronos, max_gas_wanted):
     """
@@ -896,8 +948,8 @@ def test_tx_inclusion(cronos, max_gas_wanted):
     if max_gas_wanted is None:
         return
 
-    w3 = cronos.w3
     cli = cronos.cosmos_cli()
+    w3 = cronos.w3
     block_gas_limit = 81500000
     tx_gas_limit = 80000000
     max_tx_in_block = block_gas_limit // min(max_gas_wanted, tx_gas_limit)
@@ -913,12 +965,12 @@ def test_tx_inclusion(cronos, max_gas_wanted):
     # the transactions should be included according to max_gas_wanted
     if max_tx_in_block == 1:
         for block_num, next_block_num in zip(block_nums, block_nums[1:]):
-            assert next_block_num == block_num + 1
+            assert next_block_num == block_num + 1 or next_block_num == block_num + 2
     else:
         for num in block_nums[1:max_tx_in_block]:
             assert num == block_nums[0]
         for num in block_nums[max_tx_in_block:]:
-            assert num == block_nums[0] + 1
+            assert num == block_nums[0] + 1 or num == block_nums[0] + 2
 
 
 def test_replay_protection(cronos):
@@ -940,40 +992,170 @@ def test_replay_protection(cronos):
         w3.eth.send_raw_transaction(HexBytes(raw))
 
 
-@pytest.mark.gov
-def test_submit_any_proposal(cronos, tmp_path):
-    submit_any_proposal(cronos, tmp_path)
+@pytest.fixture(scope="module")
+def cronos_allow_unprotected_txs(tmp_path_factory):
+    """
+    Start a cronos node with allow_unprotected_txs enabled (and base-fee disabled).
+    """
+    yield from setup_custom_cronos(
+        tmp_path_factory.mktemp("allow_unprotected_txs"),
+        27100,
+        Path(__file__).parent / "configs/allow-unprotected-txs.jsonnet",
+    )
+
+
+def test_replay_tx_allowed_when_unprotected_enabled(cronos_allow_unprotected_txs):
+    w3 = cronos_allow_unprotected_txs.w3
+
+    # https://etherscan.io/tx/0x06d2fa464546e99d2147e1fc997ddb624cec9c8c5e25a050cc381ee8a384eed3
+    sender = Web3.to_checksum_address("0x1aa7451DD11b8cb16AC089ED7fE05eFa00100A6A")
+    fund_address(w3, sender)
+
+    raw = (
+        (
+            Path(__file__).parent / "configs/replay-tx-0x"
+            "06d2fa464546e99d2147e1fc997ddb62"
+            "4cec9c8c5e25a050cc381ee8a384eed3.tx"
+        )
+        .read_text()
+        .strip()
+    )
+
+    txhash = w3.eth.send_raw_transaction(HexBytes(raw))
+    receipt = w3.eth.wait_for_transaction_receipt(txhash)
+    assert receipt.status == 1
+    assert receipt.contractAddress is not None
 
 
 @pytest.mark.gov
-def test_submit_send_enabled(cronos, tmp_path):
+def test_submit_any_proposal(cronos):
+    submit_any_proposal(cronos)
+
+
+@pytest.mark.gov
+def test_submit_send_enabled(cronos):
     # check bank send enable
     cli = cronos.cosmos_cli()
-    p = cli.query_bank_send()
-    assert len(p) == 0, "should be empty"
-    proposal = tmp_path / "proposal.json"
-    # governance module account as signer
-    signer = "crc10d07y265gmmuvt4z0w9aw880jnsr700jdufnyd"
+    denoms = ["basetcro", "stake"]
+    assert len(cli.query_bank_send(*denoms)) == 0, "should be empty"
     send_enable = [
-        {"denom": "basetcro", "enabled": False},
+        {"denom": "basetcro"},
         {"denom": "stake", "enabled": True},
     ]
-    proposal_src = {
-        "messages": [
+    authority = module_address("gov")
+    msg = "/cosmos.bank.v1beta1.MsgSetSendEnabled"
+    submit_gov_proposal(
+        cronos,
+        msg,
+        messages=[
             {
-                "@type": "/cosmos.bank.v1beta1.MsgSetSendEnabled",
-                "authority": signer,
+                "@type": msg,
+                "authority": authority,
                 "sendEnabled": send_enable,
             }
         ],
-        "deposit": "1basetcro",
-        "title": "title",
-        "summary": "summary",
-    }
-    proposal.write_text(json.dumps(proposal_src))
-    rsp = cli.submit_gov_proposal(proposal, from_="community")
+    )
+    assert cli.query_bank_send(*denoms) == send_enable
+
+
+def test_block_stm_delete(cronos):
+    """
+    this test case revealed a bug in block-stm,
+    see: https://github.com/crypto-org-chain/go-block-stm/pull/11
+    """
+    w3 = cronos.w3
+    cli = cronos.cosmos_cli()
+    acc = derive_new_account(3)
+    sender = acc.address
+
+    # fund new sender
+    fund = 3000000000000000000
+    tx = {"to": sender, "value": fund, "gasPrice": w3.eth.gas_price}
+    send_transaction(w3, tx)
+    assert w3.eth.get_balance(sender, "latest") == fund
+    nonce = w3.eth.get_transaction_count(sender)
+    wait_for_new_blocks(cli, 1)
+    txhashes = []
+    total = 3
+    for n in range(total):
+        tx = {
+            "to": "0x2956c404227Cc544Ea6c3f4a36702D0FD73d20A2",
+            "value": fund // total,
+            "gas": 21000,
+            "maxFeePerGas": 6556868066901,
+            "maxPriorityFeePerGas": 1500000000,
+            "nonce": nonce + n,
+        }
+        signed = sign_transaction(w3, tx, acc.key)
+        txhash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        txhashes.append(txhash)
+    for txhash in txhashes[0 : total - 1]:
+        res = w3.eth.wait_for_transaction_receipt(txhash)
+        assert res.status == 1
+    w3_wait_for_block(w3, w3.eth.block_number + 3, timeout=30)
+
+
+def test_multi_acc(cronos):
+    cli = cronos.cosmos_cli()
+    cli.make_multisig("multitest1", "signer1", "signer2")
+    multi_addr = cli.address("multitest1")
+    signer1 = cli.address("signer1")
+    cli.transfer(signer1, multi_addr, "1basetcro")
+    acc = cli.account(multi_addr)
+    res = cli.account_by_num(acc["account"]["value"]["base_account"]["account_number"])
+    assert res["account_address"] == multi_addr
+
+
+def test_textual(cronos):
+    cli = cronos.cosmos_cli()
+    rsp = cli.transfer(
+        cli.address("validator"),
+        cli.address("signer2"),
+        "1basetcro",
+        sign_mode="textual",
+    )
     assert rsp["code"] == 0, rsp["raw_log"]
-    approve_proposal(cronos, rsp)
-    print("check params have been updated now")
-    p = cli.query_bank_send()
-    assert sorted(p, key=lambda x: x["denom"]) == send_enable
+
+
+def test_block_tx_properties(cronos):
+    """
+    test block tx properties on cronos network
+    - deploy test contract
+    - call contract
+    - check all values are correct in log
+    """
+    w3 = cronos.w3
+    contract = deploy_contract(
+        w3,
+        CONTRACTS["TestBlockTxProperties"],
+    )
+
+    tx = contract.functions.emitTxDetails().build_transaction(
+        {"from": ADDRS["validator"]}
+    )
+    receipt = send_transaction(w3, tx)
+
+    assert receipt.status == 1
+    assert len(receipt.logs) == 1
+
+    assert contract.address == receipt.logs[0]["address"]
+    event_signature = HexBytes(
+        abi.event_signature_to_log_topic(
+            "TxDetailsEvent(address,address,uint256,bytes,uint256,uint256,bytes4)"
+        )
+    )
+    assert event_signature == receipt.logs[0]["topics"][0]
+    validator_hex_address = HexBytes(b"\x00" * 12 + HexBytes(ADDRS["validator"]))
+    assert validator_hex_address == receipt.logs[0]["topics"][1]
+    assert validator_hex_address == receipt.logs[0]["topics"][2]
+
+    # check event values
+    tx_details_event = contract.events.TxDetailsEvent().process_receipt(receipt)
+    data = tx_details_event[0]["args"]
+    assert data["origin"] == ADDRS["validator"]
+    assert data["sender"] == ADDRS["validator"]
+    assert data["value"] == 0
+    assert data["data"] == bytes.fromhex("8e091b5e")
+    assert data["price"] > 0
+    assert data["gas"] == 3633
+    assert data["sig"] == bytes.fromhex("8e091b5e")

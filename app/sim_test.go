@@ -9,25 +9,28 @@ import (
 	"strings"
 	"testing"
 
-	dbm "github.com/cometbft/cometbft-db"
 	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/libs/log"
 	tmproto "github.com/cometbft/cometbft/proto/tendermint/types"
-	evmante "github.com/evmos/ethermint/app/ante"
+	dbm "github.com/cosmos/cosmos-db"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
+	cronosmoduletypes "github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	"github.com/evmos/ethermint/ante/cache"
+	evmante "github.com/evmos/ethermint/evmd/ante"
 	evmtypes "github.com/evmos/ethermint/x/evm/types"
 	"github.com/stretchr/testify/require"
 
-	"cosmossdk.io/simapp"
+	"cosmossdk.io/log"
+	"cosmossdk.io/store"
+	storetypes "cosmossdk.io/store/types"
+	evidencetypes "cosmossdk.io/x/evidence/types"
+
 	"github.com/cosmos/cosmos-sdk/baseapp"
-	"github.com/cosmos/cosmos-sdk/store"
-	storetypes "github.com/cosmos/cosmos-sdk/store/types"
 	simtestutil "github.com/cosmos/cosmos-sdk/testutil/sims"
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	banktypes "github.com/cosmos/cosmos-sdk/x/bank/types"
-	capabilitytypes "github.com/cosmos/cosmos-sdk/x/capability/types"
 	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
-	evidencetypes "github.com/cosmos/cosmos-sdk/x/evidence/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	minttypes "github.com/cosmos/cosmos-sdk/x/mint/types"
 	paramtypes "github.com/cosmos/cosmos-sdk/x/params/types"
@@ -35,12 +38,6 @@ import (
 	simcli "github.com/cosmos/cosmos-sdk/x/simulation/client/cli"
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-
-	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-	ibcfeetypes "github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	ibctransfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	ibcexported "github.com/cosmos/ibc-go/v7/modules/core/exported"
-	cronosmoduletypes "github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 )
 
 // Get flags every time the simulator is run
@@ -68,19 +65,19 @@ func interBlockCacheOpt() func(*baseapp.BaseApp) {
 
 // NewSimApp disable feemarket on native tx, otherwise the cosmos-sdk simulation tests will fail.
 func NewSimApp(logger log.Logger, db dbm.DB, baseAppOptions ...func(*baseapp.BaseApp)) (*App, error) {
-	encodingConfig := MakeEncodingConfig()
-	app := New(logger, db, nil, false, true, map[int64]bool{}, DefaultNodeHome, simcli.FlagPeriodValue, encodingConfig, EmptyAppOptions{}, baseAppOptions...)
+	app := New(logger, db, nil, false, EmptyAppOptions{}, baseAppOptions...)
 	// disable feemarket on native tx
 	anteHandler, err := evmante.NewAnteHandler(evmante.HandlerOptions{
 		AccountKeeper:   app.AccountKeeper,
 		BankKeeper:      app.BankKeeper,
-		SignModeHandler: encodingConfig.TxConfig.SignModeHandler(),
+		SignModeHandler: app.TxConfig().SignModeHandler(),
 		FeegrantKeeper:  app.FeeGrantKeeper,
 		SigGasConsumer:  evmante.DefaultSigVerificationGasConsumer,
 		IBCKeeper:       app.IBCKeeper,
 		EvmKeeper:       app.EvmKeeper,
 		FeeMarketKeeper: app.FeeMarketKeeper,
 		MaxTxGasWanted:  0,
+		AnteCache:       cache.NewAnteCache(0),
 	})
 	if err != nil {
 		return nil, err
@@ -116,7 +113,7 @@ func TestFullAppSimulation(t *testing.T) {
 		t,
 		os.Stdout,
 		app.BaseApp,
-		StateFn(app.AppCodec(), app.SimulationManager()),
+		StateFn(app),
 		simtypes.RandomAccounts, // Replace with own random account function if using keys other than secp256k1
 		simtestutil.SimulationOperations(app, app.AppCodec(), config),
 		app.ModuleAccountAddrs(),
@@ -158,7 +155,7 @@ func TestAppImportExport(t *testing.T) {
 		t,
 		os.Stdout,
 		app.BaseApp,
-		StateFn(app.AppCodec(), app.SimulationManager()),
+		StateFn(app),
 		simtypes.RandomAccounts, // Replace with own random account function if using keys other than secp256k1
 		simtestutil.SimulationOperations(app, app.AppCodec(), config),
 		app.ModuleAccountAddrs(),
@@ -195,7 +192,7 @@ func TestAppImportExport(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Name, newApp.Name())
 
-	var genesisState simapp.GenesisState
+	var genesisState GenesisState
 	err = json.Unmarshal(exported.AppState, &genesisState)
 	require.NoError(t, err)
 
@@ -210,16 +207,18 @@ func TestAppImportExport(t *testing.T) {
 		}
 	}()
 
-	ctxA := app.NewContext(true, tmproto.Header{
+	ctxA := app.NewContext(true).WithBlockHeader(tmproto.Header{
 		Height:  app.LastBlockHeight(),
 		ChainID: SimAppChainID,
-	})
-	ctxB := newApp.NewContext(true, tmproto.Header{
+	}).WithChainID(SimAppChainID)
+	ctxB := newApp.NewContext(true).WithBlockHeader(tmproto.Header{
 		Height:  app.LastBlockHeight(),
 		ChainID: SimAppChainID,
-	})
-	newApp.mm.InitGenesis(ctxB, app.AppCodec(), genesisState)
-	newApp.StoreConsensusParams(ctxB, exported.ConsensusParams)
+	}).WithChainID(SimAppChainID)
+	_, err = newApp.ModuleManager.InitGenesis(ctxB, app.AppCodec(), genesisState)
+	require.NoError(t, err)
+	err = newApp.StoreConsensusParams(ctxB, exported.ConsensusParams)
+	require.NoError(t, err)
 
 	fmt.Printf("comparing stores...\n")
 
@@ -239,19 +238,17 @@ func TestAppImportExport(t *testing.T) {
 		{app.keys[paramtypes.StoreKey], newApp.keys[paramtypes.StoreKey], [][]byte{}},
 		{app.keys[govtypes.StoreKey], newApp.keys[govtypes.StoreKey], [][]byte{}},
 		{app.keys[evidencetypes.StoreKey], newApp.keys[evidencetypes.StoreKey], [][]byte{}},
-		{app.keys[capabilitytypes.StoreKey], newApp.keys[capabilitytypes.StoreKey], [][]byte{}},
 		{app.keys[evmtypes.StoreKey], newApp.keys[evmtypes.StoreKey], [][]byte{}},
 		{app.keys[cronosmoduletypes.StoreKey], newApp.keys[cronosmoduletypes.StoreKey], [][]byte{}},
 		{app.keys[ibcexported.StoreKey], newApp.keys[ibcexported.StoreKey], [][]byte{}},
 		{app.keys[ibctransfertypes.StoreKey], newApp.keys[ibctransfertypes.StoreKey], [][]byte{}},
-		{app.keys[ibcfeetypes.StoreKey], newApp.keys[ibcfeetypes.StoreKey], [][]byte{}},
 	}
 
 	for _, skp := range storeKeysPrefixes {
 		storeA := ctxA.KVStore(skp.A)
 		storeB := ctxB.KVStore(skp.B)
 
-		failedKVAs, failedKVBs := sdk.DiffKVStores(storeA, storeB, skp.Prefixes)
+		failedKVAs, failedKVBs := simtestutil.DiffKVStores(storeA, storeB, skp.Prefixes)
 		require.Equal(t, len(failedKVAs), len(failedKVBs), "unequal sets of key-values to compare")
 
 		fmt.Printf("compared %d different key/value pairs between %s and %s\n", len(failedKVAs), skp.A, skp.B)
@@ -284,7 +281,7 @@ func TestAppSimulationAfterImport(t *testing.T) {
 		t,
 		os.Stdout,
 		app.BaseApp,
-		StateFn(app.AppCodec(), app.SimulationManager()),
+		StateFn(app),
 		simtypes.RandomAccounts, // Replace with own random account function if using keys other than secp256k1
 		simtestutil.SimulationOperations(app, app.AppCodec(), config),
 		app.ModuleAccountAddrs(),
@@ -325,16 +322,17 @@ func TestAppSimulationAfterImport(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, Name, newApp.Name())
 
-	newApp.InitChain(abci.RequestInitChain{
+	_, err = newApp.InitChain(&abci.RequestInitChain{
 		ChainId:       SimAppChainID,
 		AppStateBytes: exported.AppState,
 	})
+	require.NoError(t, err)
 
 	_, _, err = simulation.SimulateFromSeed(
 		t,
 		os.Stdout,
 		newApp.BaseApp,
-		StateFn(app.AppCodec(), app.SimulationManager()),
+		StateFn(app),
 		simtypes.RandomAccounts, // Replace with own random account function if using keys other than secp256k1
 		simtestutil.SimulationOperations(newApp, newApp.AppCodec(), config),
 		app.ModuleAccountAddrs(),
@@ -369,7 +367,7 @@ func TestAppStateDeterminism(t *testing.T) {
 		for j := 0; j < numTimesToRunPerSeed; j++ {
 			var logger log.Logger
 			if simcli.FlagVerboseValue {
-				logger = log.TestingLogger()
+				logger = log.NewTestLogger(t)
 			} else {
 				logger = log.NewNopLogger()
 			}
@@ -387,7 +385,7 @@ func TestAppStateDeterminism(t *testing.T) {
 				t,
 				os.Stdout,
 				app.BaseApp,
-				StateFn(app.AppCodec(), app.SimulationManager()),
+				StateFn(app),
 				simtypes.RandomAccounts, // Replace with own random account function if using keys other than secp256k1
 				simtestutil.SimulationOperations(app, app.AppCodec(), config),
 				app.ModuleAccountAddrs(),

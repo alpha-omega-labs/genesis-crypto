@@ -1,13 +1,12 @@
 package keeper
 
 import (
-	"math/big"
-
-	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 // LogProcessEvmHook is an evm hook that convert specific contract logs into native module calls
@@ -26,7 +25,7 @@ func NewLogProcessEvmHook(handlers ...types.EvmLogHandler) *LogProcessEvmHook {
 }
 
 // PostTxProcessing implements EvmHook interface
-func (h LogProcessEvmHook) PostTxProcessing(ctx sdk.Context, msg core.Message, receipt *ethtypes.Receipt) error {
+func (h LogProcessEvmHook) PostTxProcessing(ctx sdk.Context, _ *core.Message, receipt *ethtypes.Receipt) error {
 	addLogToReceiptFunc := newFuncAddLogToReceipt(receipt)
 	for _, log := range receipt.Logs {
 		if len(log.Topics) == 0 {
@@ -64,7 +63,8 @@ func newFuncAddLogToReceipt(receipt *ethtypes.Receipt) func(contractAddress comm
 
 		// Compute block bloom filter and set to the receipt
 		bloom := receipt.Bloom.Big()
-		bloom.Or(bloom, big.NewInt(0).SetBytes(ethtypes.LogsBloom([]*ethtypes.Log{newLog})))
+		logsBloom := ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{newLog}})
+		bloom.Or(bloom, logsBloom.Big())
 		receipt.Bloom = ethtypes.BytesToBloom(bloom.Bytes())
 
 		receipt.Logs = append(receipt.Logs, newLog)

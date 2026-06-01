@@ -15,6 +15,9 @@
       }
     },
     {
+      "url": "./tmp-swagger-gen/e2ee/query.swagger.json"
+    },
+    {
       "url": "./tmp-swagger-gen/ethermint/evm/v1/query.swagger.json",
       "operationIds": {
         "rename": {
@@ -78,6 +81,21 @@
       "operationIds": {
         "rename": {
           "Params": "GovParams"
+        }
+      }
+    },
+    {
+      "url": "./tmp-swagger-gen/cosmos/gov/v1/query.swagger.json",
+      "operationIds": {
+        "rename": {
+          "Params": "GovV1Params",
+          "Proposal": "GovV1Proposal",
+          "Proposals": "GovV1Proposal",
+          "Vote": "GovV1Vote",
+          "Votes": "GovV1Votes",
+          "Deposit": "GovV1Deposit",
+          "Deposits": "GovV1Deposit",
+          "TallyResult": "GovV1TallyResult"
         }
       }
     },
@@ -169,14 +187,6 @@
       "operationIds": {
         "rename": {
           "Params": "InterchainAccountsControllerParams"
-        }
-      }
-    },
-    {
-      "url": "./tmp-swagger-gen/icaauth/v1/query.swagger.json",
-      "operationIds": {
-        "rename": {
-          "Params": "IcaauthParams"
         }
       }
     }

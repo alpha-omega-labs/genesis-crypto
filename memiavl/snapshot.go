@@ -15,10 +15,10 @@ const (
 	// SnapshotFileMagic is little endian encoded b"IAVL"
 	SnapshotFileMagic = 1280721225
 
-	// the initial snapshot format
+	// SnapshotFormat the initial snapshot format
 	SnapshotFormat = 0
 
-	// magic: uint32, format: uint32, version: uint32
+	// SizeMetadata magic: uint32, format: uint32, version: uint32
 	SizeMetadata = 12
 
 	FileNameNodes    = "nodes"
@@ -26,7 +26,7 @@ const (
 	FileNameKVs      = "kvs"
 	FileNameMetadata = "metadata"
 
-	// check for cancel every 1000 leaves
+	// CancelCheckInterval check for cancel every 1000 leaves
 	CancelCheckInterval = 1000
 )
 
@@ -67,7 +67,7 @@ func OpenSnapshot(snapshotDir string) (snapshot *Snapshot, err error) {
 		return nil, err
 	}
 	if len(bz) != SizeMetadata {
-		return nil, fmt.Errorf("wrong metadata file size, expcted: %d, found: %d", SizeMetadata, len(bz))
+		return nil, fmt.Errorf("wrong metadata file size, expected: %d, found: %d", SizeMetadata, len(bz))
 	}
 
 	magic := binary.LittleEndian.Uint32(bz)
@@ -264,13 +264,13 @@ func (snapshot *Snapshot) Key(offset uint64) []byte {
 
 // KeyValue returns a zero-copy slice of key/value pair by offset
 func (snapshot *Snapshot) KeyValue(offset uint64) ([]byte, []byte) {
-	len := uint64(binary.LittleEndian.Uint32(snapshot.kvs[offset:]))
+	length := uint64(binary.LittleEndian.Uint32(snapshot.kvs[offset:]))
 	offset += 4
-	key := snapshot.kvs[offset : offset+len]
-	offset += len
-	len = uint64(binary.LittleEndian.Uint32(snapshot.kvs[offset:]))
+	key := snapshot.kvs[offset : offset+length]
+	offset += length
+	length = uint64(binary.LittleEndian.Uint32(snapshot.kvs[offset:]))
 	offset += 4
-	value := snapshot.kvs[offset : offset+len]
+	value := snapshot.kvs[offset : offset+length]
 	return key, value
 }
 

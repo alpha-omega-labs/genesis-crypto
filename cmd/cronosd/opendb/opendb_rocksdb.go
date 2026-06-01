@@ -8,12 +8,14 @@ import (
 	"runtime"
 	"strings"
 
-	dbm "github.com/cometbft/cometbft-db"
-	"github.com/cosmos/cosmos-sdk/server/types"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/linxGnu/grocksdb"
+
+	"github.com/cosmos/cosmos-sdk/server/types"
 )
 
-const BlockCacheSize = 1 << 30
+// BlockCacheSize 3G block cache
+const BlockCacheSize = 3 << 30
 
 func OpenDB(_ types.AppOptions, home string, backendType dbm.BackendType) (dbm.DB, error) {
 	dataDir := filepath.Join(home, "data")
@@ -53,6 +55,8 @@ func openRocksdb(dir string, readonly bool) (dbm.DB, error) {
 	}
 
 	ro := grocksdb.NewDefaultReadOptions()
+	ro.SetAsyncIO(true)
+	ro.SetReadaheadSize(16 * 1024 * 1024)
 	wo := grocksdb.NewDefaultWriteOptions()
 	woSync := grocksdb.NewDefaultWriteOptions()
 	woSync.SetSync(true)
@@ -98,7 +102,6 @@ func NewRocksdbOptions(opts *grocksdb.Options, sstFileWriter bool) *grocksdb.Opt
 	// block based table options
 	bbto := grocksdb.NewDefaultBlockBasedTableOptions()
 
-	// 1G block cache
 	bbto.SetBlockCache(grocksdb.NewLRUCache(BlockCacheSize))
 
 	// http://rocksdb.org/blog/2021/12/29/ribbon-filter.html
@@ -109,6 +112,11 @@ func NewRocksdbOptions(opts *grocksdb.Options, sstFileWriter bool) *grocksdb.Opt
 	bbto.SetIndexType(grocksdb.KTwoLevelIndexSearchIndexType)
 	bbto.SetPartitionFilters(true)
 	bbto.SetOptimizeFiltersForMemory(true)
+
+	// reduce memory usage
+	bbto.SetCacheIndexAndFilterBlocks(true)
+	bbto.SetPinTopLevelIndexAndFilter(true)
+	bbto.SetPinL0FilterAndIndexBlocksInCache(true)
 
 	// hash index is better for iavl tree which mostly do point lookup.
 	bbto.SetDataBlockIndexType(grocksdb.KDataBlockIndexTypeBinarySearchAndHash)

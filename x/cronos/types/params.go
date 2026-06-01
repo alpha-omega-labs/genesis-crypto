@@ -97,11 +97,6 @@ func validateIsIbcDenom(i interface{}) error {
 		return fmt.Errorf("invalid parameter type: %T", i)
 	}
 
-	// Allow empty during upgrades / fresh chains where this param may be unset.
-	if s == "" {
-		return nil
-	}
-
 	if !IsValidIBCDenom(s) {
 		return fmt.Errorf("invalid ibc denom: %q", s)
 	}

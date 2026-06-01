@@ -7,21 +7,22 @@ import (
 	"sort"
 	"strings"
 
-	"cosmossdk.io/errors"
-	dbm "github.com/cometbft/cometbft-db"
-	abci "github.com/cometbft/cometbft/abci/types"
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cosmos/cosmos-sdk/store/listenkv"
-	"github.com/cosmos/cosmos-sdk/store/mem"
-	pruningtypes "github.com/cosmos/cosmos-sdk/store/pruning/types"
-	"github.com/cosmos/cosmos-sdk/store/rootmulti"
-	"github.com/cosmos/cosmos-sdk/store/transient"
-	"github.com/cosmos/cosmos-sdk/store/types"
-	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/crypto-org-chain/cronos/memiavl"
 	"github.com/crypto-org-chain/cronos/store/cachemulti"
 	"github.com/crypto-org-chain/cronos/store/memiavlstore"
+
+	"cosmossdk.io/errors"
+	"cosmossdk.io/log"
+	"cosmossdk.io/store/listenkv"
+	"cosmossdk.io/store/mem"
+	"cosmossdk.io/store/metrics"
+	pruningtypes "cosmossdk.io/store/pruning/types"
+	"cosmossdk.io/store/rootmulti"
+	"cosmossdk.io/store/transient"
+	"cosmossdk.io/store/types"
+
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 )
 
 const CommitInfoFileName = "commit_infos"
@@ -41,8 +42,8 @@ type Store struct {
 
 	storesParams map[types.StoreKey]storeParams
 	keysByName   map[string]types.StoreKey
-	stores       map[types.StoreKey]types.CommitKVStore
-	listeners    map[types.StoreKey][]types.WriteListener
+	stores       map[types.StoreKey]types.CommitStore
+	listeners    map[types.StoreKey]*types.MemoryListener
 
 	opts memiavl.Options
 
@@ -52,7 +53,7 @@ type Store struct {
 	supportExportNonSnapshotVersion bool
 }
 
-func NewStore(dir string, logger log.Logger, sdk46Compact bool, supportExportNonSnapshotVersion bool) *Store {
+func NewStore(dir string, logger log.Logger, sdk46Compact, supportExportNonSnapshotVersion bool) *Store {
 	return &Store{
 		dir:                             dir,
 		logger:                          logger,
@@ -61,8 +62,8 @@ func NewStore(dir string, logger log.Logger, sdk46Compact bool, supportExportNon
 
 		storesParams: make(map[types.StoreKey]storeParams),
 		keysByName:   make(map[string]types.StoreKey),
-		stores:       make(map[types.StoreKey]types.CommitKVStore),
-		listeners:    make(map[types.StoreKey][]types.WriteListener),
+		stores:       make(map[types.StoreKey]types.CommitStore),
+		listeners:    make(map[types.StoreKey]*types.MemoryListener),
 	}
 }
 
@@ -71,7 +72,7 @@ func (rs *Store) flush() error {
 	var changeSets []*memiavl.NamedChangeSet
 	for key := range rs.stores {
 		// it'll unwrap the inter-block cache
-		store := rs.GetCommitKVStore(key)
+		store := rs.GetCommitStore(key)
 		if memiavlStore, ok := store.(*memiavlstore.Store); ok {
 			cs := memiavlStore.PopChangeSet()
 			if len(cs.Pairs) > 0 {
@@ -103,7 +104,7 @@ func (rs *Store) WorkingHash() []byte {
 	return commitInfo.Hash()
 }
 
-// Implements interface Committer
+// Commit Implements interface Committer
 func (rs *Store) Commit() types.CommitID {
 	if err := rs.flush(); err != nil {
 		panic(err)
@@ -139,7 +140,7 @@ func (rs *Store) Close() error {
 	return rs.db.Close()
 }
 
-// Implements interface Committer
+// LastCommitID Implements interface Committer
 func (rs *Store) LastCommitID() types.CommitID {
 	if rs.lastCommitInfo == nil {
 		v, err := memiavl.GetLatestVersion(rs.dir)
@@ -152,46 +153,52 @@ func (rs *Store) LastCommitID() types.CommitID {
 	return rs.lastCommitInfo.CommitID()
 }
 
-// Implements interface Committer
+// SetPruning Implements interface Committer
 func (rs *Store) SetPruning(pruningtypes.PruningOptions) {
 }
 
-// Implements interface Committer
+// SetMetrics sets the metrics gatherer for the store package
+func (rs *Store) SetMetrics(metrics metrics.StoreMetrics) {
+}
+
+// GetPruning Implements interface Committer
 func (rs *Store) GetPruning() pruningtypes.PruningOptions {
 	return pruningtypes.NewPruningOptions(pruningtypes.PruningDefault)
 }
 
-// Implements interface Store
+// GetStoreType Implements interface Store
 func (rs *Store) GetStoreType() types.StoreType {
 	return types.StoreTypeMulti
 }
 
-// Implements interface CacheWrapper
+// CacheWrap Implements interface CacheWrapper
 func (rs *Store) CacheWrap() types.CacheWrap {
 	return rs.CacheMultiStore().(types.CacheWrap)
 }
 
-// Implements interface CacheWrapper
+// CacheWrapWithTrace Implements interface CacheWrapper
 func (rs *Store) CacheWrapWithTrace(_ io.Writer, _ types.TraceContext) types.CacheWrap {
 	return rs.CacheWrap()
 }
 
-// Implements interface MultiStore
+// CacheMultiStore Implements interface MultiStore
 func (rs *Store) CacheMultiStore() types.CacheMultiStore {
 	stores := make(map[types.StoreKey]types.CacheWrapper)
 	for k, v := range rs.stores {
-		store := types.KVStore(v)
-		// Wire the listenkv.Store to allow listeners to observe the writes from the cache store,
-		// set same listeners on cache store will observe duplicated writes.
-		if rs.ListeningEnabled(k) {
-			store = listenkv.NewStore(store, k, rs.listeners[k])
+		store := types.CacheWrapper(v)
+		if kv, ok := store.(types.KVStore); ok {
+			// Wire the listenkv.Store to allow listeners to observe the writes from the cache store,
+			// set same listeners on cache store will observe duplicated writes.
+			if rs.ListeningEnabled(k) {
+				store = listenkv.NewStore(kv, k, rs.listeners[k])
+			}
 		}
 		stores[k] = store
 	}
-	return cachemulti.NewStore(nil, stores, rs.keysByName, nil, nil, nil)
+	return cachemulti.NewStore(stores, nil, nil, nil)
 }
 
-// Implements interface MultiStore
+// CacheMultiStoreWithVersion Implements interface MultiStore
 // used to createQueryContext, abci_query or grpc query service.
 func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStore, error) {
 	if version == 0 || (rs.lastCommitInfo != nil && version == rs.lastCommitInfo.Version) {
@@ -219,50 +226,58 @@ func (rs *Store) CacheMultiStoreWithVersion(version int64) (types.CacheMultiStor
 		stores[rs.keysByName[tree.Name]] = memiavlstore.New(tree.Tree, rs.logger)
 	}
 
-	return cachemulti.NewStore(nil, stores, rs.keysByName, nil, nil, db), nil
+	return cachemulti.NewStore(stores, nil, nil, nil), nil
 }
 
-// Implements interface MultiStore
+// GetStore Implements interface MultiStore
 func (rs *Store) GetStore(key types.StoreKey) types.Store {
-	return rs.stores[key]
+	s, ok := rs.stores[key]
+	if !ok {
+		panic(fmt.Sprintf("store does not exist for key: %s", key.Name()))
+	}
+	return s
 }
 
-// Implements interface MultiStore
+// GetKVStore Implements interface MultiStore
 func (rs *Store) GetKVStore(key types.StoreKey) types.KVStore {
-	return rs.stores[key]
+	s, ok := rs.GetStore(key).(types.KVStore)
+	if !ok {
+		panic(fmt.Sprintf("store with key %v is not KVStore", key))
+	}
+	return s
 }
 
-// Implements interface MultiStore
+// TracingEnabled Implements interface MultiStore
 func (rs *Store) TracingEnabled() bool {
 	return false
 }
 
-// Implements interface MultiStore
+// SetTracer Implements interface MultiStore
 func (rs *Store) SetTracer(w io.Writer) types.MultiStore {
 	return nil
 }
 
-// Implements interface MultiStore
+// SetTracingContext Implements interface MultiStore
 func (rs *Store) SetTracingContext(types.TraceContext) types.MultiStore {
 	return nil
 }
 
-// Implements interface MultiStore
+// LatestVersion Implements interface MultiStore
 func (rs *Store) LatestVersion() int64 {
 	return rs.db.Version()
 }
 
-// Implements interface Snapshotter
+// PruneSnapshotHeight Implements interface Snapshotter
 // not needed, memiavl manage its own snapshot/pruning strategy
 func (rs *Store) PruneSnapshotHeight(height int64) {
 }
 
-// Implements interface Snapshotter
+// SetSnapshotInterval Implements interface Snapshotter
 // not needed, memiavl manage its own snapshot/pruning strategy
 func (rs *Store) SetSnapshotInterval(snapshotInterval uint64) {
 }
 
-// Implements interface CommitMultiStore
+// MountStoreWithDB Implements interface CommitMultiStore
 func (rs *Store) MountStoreWithDB(key types.StoreKey, typ types.StoreType, _ dbm.DB) {
 	if key == nil {
 		panic("MountIAVLStore() key cannot be nil")
@@ -277,28 +292,33 @@ func (rs *Store) MountStoreWithDB(key types.StoreKey, typ types.StoreType, _ dbm
 	rs.keysByName[key.Name()] = key
 }
 
-// Implements interface CommitMultiStore
+// GetCommitStore Implements interface CommitMultiStore
 func (rs *Store) GetCommitStore(key types.StoreKey) types.CommitStore {
-	return rs.GetCommitKVStore(key)
-}
-
-// Implements interface CommitMultiStore
-func (rs *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
 	return rs.stores[key]
 }
 
-// Implements interface CommitMultiStore
+// GetCommitKVStore Implements interface CommitMultiStore
+func (rs *Store) GetCommitKVStore(key types.StoreKey) types.CommitKVStore {
+	store, ok := rs.GetCommitStore(key).(types.CommitKVStore)
+	if !ok {
+		panic(fmt.Sprintf("store with key %v is not CommitKVStore", key))
+	}
+
+	return store
+}
+
+// LoadLatestVersion Implements interface CommitMultiStore
 // used by normal node startup.
 func (rs *Store) LoadLatestVersion() error {
 	return rs.LoadVersionAndUpgrade(0, nil)
 }
 
-// Implements interface CommitMultiStore
+// LoadLatestVersionAndUpgrade Implements interface CommitMultiStore
 func (rs *Store) LoadLatestVersionAndUpgrade(upgrades *types.StoreUpgrades) error {
 	return rs.LoadVersionAndUpgrade(0, upgrades)
 }
 
-// Implements interface CommitMultiStore
+// LoadVersionAndUpgrade Implements interface CommitMultiStore
 // used by node startup with UpgradeStoreLoader
 func (rs *Store) LoadVersionAndUpgrade(version int64, upgrades *types.StoreUpgrades) error {
 	if version > math.MaxUint32 {
@@ -349,7 +369,7 @@ func (rs *Store) LoadVersionAndUpgrade(version int64, upgrades *types.StoreUpgra
 		}
 	}
 
-	newStores := make(map[types.StoreKey]types.CommitKVStore, len(storesKeys))
+	newStores := make(map[types.StoreKey]types.CommitStore, len(storesKeys))
 	for _, key := range storesKeys {
 		newStores[key], err = rs.loadCommitStoreFromParams(db, key, rs.storesParams[key])
 		if err != nil {
@@ -372,7 +392,7 @@ func (rs *Store) LoadVersionAndUpgrade(version int64, upgrades *types.StoreUpgra
 	return nil
 }
 
-func (rs *Store) loadCommitStoreFromParams(db *memiavl.DB, key types.StoreKey, params storeParams) (types.CommitKVStore, error) {
+func (rs *Store) loadCommitStoreFromParams(db *memiavl.DB, key types.StoreKey, params storeParams) (types.CommitStore, error) {
 	switch params.typ {
 	case types.StoreTypeMulti:
 		panic("recursive MultiStores not yet supported")
@@ -381,13 +401,12 @@ func (rs *Store) loadCommitStoreFromParams(db *memiavl.DB, key types.StoreKey, p
 		if tree == nil {
 			return nil, fmt.Errorf("new store is not added in upgrades: %s", key.Name())
 		}
-		return types.CommitKVStore(memiavlstore.New(tree, rs.logger)), nil
+		return types.CommitStore(memiavlstore.New(tree, rs.logger)), nil
 	case types.StoreTypeDB:
 		panic("recursive MultiStores not yet supported")
 	case types.StoreTypeTransient:
-		_, ok := key.(*types.TransientStoreKey)
-		if !ok {
-			return nil, fmt.Errorf("invalid StoreKey for StoreTypeTransient: %s", key.String())
+		if _, ok := key.(*types.TransientStoreKey); !ok {
+			return nil, fmt.Errorf("unexpected key type for a TransientStoreKey; got: %s, %T", key.String(), key)
 		}
 
 		return transient.NewStore(), nil
@@ -400,11 +419,11 @@ func (rs *Store) loadCommitStoreFromParams(db *memiavl.DB, key types.StoreKey, p
 		return mem.NewStore(), nil
 
 	default:
-		panic(fmt.Sprintf("unrecognized store type %v", params.typ))
+		return rs.loadExtraStore(db, key, params)
 	}
 }
 
-// Implements interface CommitMultiStore
+// LoadVersion Implements interface CommitMultiStore
 // used by export cmd
 func (rs *Store) LoadVersion(ver int64) error {
 	return rs.LoadVersionAndUpgrade(ver, nil)
@@ -413,21 +432,25 @@ func (rs *Store) LoadVersion(ver int64) error {
 // SetInterBlockCache is a noop here because memiavl do caching on it's own, which works well with zero-copy.
 func (rs *Store) SetInterBlockCache(c types.MultiStorePersistentCache) {}
 
-// Implements interface CommitMultiStore
+// SetInitialVersion Implements interface CommitMultiStore
 // used by InitChain when the initial height is bigger than 1
 func (rs *Store) SetInitialVersion(version int64) error {
 	return rs.db.SetInitialVersion(version)
 }
 
-// Implements interface CommitMultiStore
+// SetIAVLCacheSize Implements interface CommitMultiStore
 func (rs *Store) SetIAVLCacheSize(size int) {
 }
 
-// Implements interface CommitMultiStore
+// SetIAVLDisableFastNode Implements interface CommitMultiStore
 func (rs *Store) SetIAVLDisableFastNode(disable bool) {
 }
 
-// Implements interface CommitMultiStore
+// SetIAVLSyncPruning Implements interface CommitMultiStore
+func (rs *Store) SetIAVLSyncPruning(syncPruning bool) {
+}
+
+// SetLazyLoading Implements interface CommitMultiStore
 func (rs *Store) SetLazyLoading(lazyLoading bool) {
 }
 
@@ -465,24 +488,43 @@ func (rs *Store) RollbackToVersion(target int64) error {
 	return err
 }
 
-// Implements interface CommitMultiStore
+// ListeningEnabled Implements interface CommitMultiStore
 func (rs *Store) ListeningEnabled(key types.StoreKey) bool {
 	if ls, ok := rs.listeners[key]; ok {
-		return len(ls) != 0
+		return ls != nil
 	}
 	return false
 }
 
-// Implements interface CommitMultiStore
-func (rs *Store) AddListeners(key types.StoreKey, listeners []types.WriteListener) {
-	if ls, ok := rs.listeners[key]; ok {
-		rs.listeners[key] = append(ls, listeners...)
-	} else {
-		rs.listeners[key] = listeners
+// AddListeners Implements interface CommitMultiStore
+func (rs *Store) AddListeners(keys []types.StoreKey) {
+	for i := range keys {
+		listener := rs.listeners[keys[i]]
+		if listener == nil {
+			rs.listeners[keys[i]] = types.NewMemoryListener()
+		}
 	}
 }
 
-// getStoreByName performs a lookup of a StoreKey given a store name typically
+// PopStateCache returns the accumulated state change messages from the CommitMultiStore
+// Calling PopStateCache destroys only the currently accumulated state in each listener
+// not the state in the store itself. This is a mutating and destructive operation.
+// This method has been synchronized.
+func (rs *Store) PopStateCache() []*types.StoreKVPair {
+	var cache []*types.StoreKVPair
+	for key := range rs.listeners {
+		ls := rs.listeners[key]
+		if ls != nil {
+			cache = append(cache, ls.PopStateCache()...)
+		}
+	}
+	sort.SliceStable(cache, func(i, j int) bool {
+		return cache[i].StoreKey < cache[j].StoreKey
+	})
+	return cache
+}
+
+// GetStoreByName performs a lookup of a StoreKey given a store name typically
 // provided in a path. The StoreKey is then used to perform a lookup and return
 // a Store. If the Store is wrapped in an inter-block cache, it will be unwrapped
 // prior to being returned. If the StoreKey does not exist, nil is returned.
@@ -492,11 +534,11 @@ func (rs *Store) GetStoreByName(name string) types.Store {
 		return nil
 	}
 
-	return rs.GetCommitKVStore(key)
+	return rs.GetCommitStore(key)
 }
 
-// Implements interface Queryable
-func (rs *Store) Query(req abci.RequestQuery) abci.ResponseQuery {
+// Query Implements interface Queryable
+func (rs *Store) Query(req *types.RequestQuery) (*types.ResponseQuery, error) {
 	version := req.Height
 	if version == 0 {
 		version = rs.db.Version()
@@ -510,7 +552,7 @@ func (rs *Store) Query(req abci.RequestQuery) abci.ResponseQuery {
 		var err error
 		db, err = memiavl.Load(rs.dir, memiavl.Options{TargetVersion: uint32(version), ReadOnly: true})
 		if err != nil {
-			return sdkerrors.QueryResult(err, false)
+			return nil, err
 		}
 		defer db.Close()
 	}
@@ -518,21 +560,24 @@ func (rs *Store) Query(req abci.RequestQuery) abci.ResponseQuery {
 	path := req.Path
 	storeName, subpath, err := parsePath(path)
 	if err != nil {
-		return sdkerrors.QueryResult(err, false)
+		return nil, err
 	}
 
 	store := types.Queryable(memiavlstore.New(db.TreeByName(storeName), rs.logger))
 
 	// trim the path and make the query
 	req.Path = subpath
-	res := store.Query(req)
+	res, err := store.Query(req)
+	if err != nil {
+		return nil, err
+	}
 
 	if !req.Prove || !rootmulti.RequireProof(subpath) {
-		return res
+		return res, nil
 	}
 
 	if res.ProofOps == nil || len(res.ProofOps.Ops) == 0 {
-		return sdkerrors.QueryResult(errors.Wrap(sdkerrors.ErrInvalidRequest, "proof is unexpectedly empty; ensure height has not been pruned"), false)
+		return nil, errors.Wrap(sdkerrors.ErrInvalidRequest, "proof is unexpectedly empty; ensure height has not been pruned")
 	}
 
 	commitInfo := convertCommitInfo(db.LastCommitInfo())
@@ -543,13 +588,13 @@ func (rs *Store) Query(req abci.RequestQuery) abci.ResponseQuery {
 	// Restore origin path and append proof op.
 	res.ProofOps.Ops = append(res.ProofOps.Ops, commitInfo.ProofOp(storeName))
 
-	return res
+	return res, nil
 }
 
 // parsePath expects a format like /<storeName>[/<subpath>]
 // Must start with /, subpath may be empty
 // Returns error if it doesn't start with /
-func parsePath(path string) (storeName string, subpath string, err error) {
+func parsePath(path string) (storeName, subpath string, err error) {
 	if !strings.HasPrefix(path, "/") {
 		return storeName, subpath, errors.Wrapf(sdkerrors.ErrUnknownRequest, "invalid path: %s", path)
 	}

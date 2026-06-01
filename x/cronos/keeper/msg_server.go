@@ -3,11 +3,13 @@ package keeper
 import (
 	"context"
 
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+
 	"cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 )
 
 type msgServer struct {
@@ -68,12 +70,12 @@ func (k msgServer) UpdateTokenMapping(goCtx context.Context, msg *types.MsgUpdat
 	ctx := sdk.UnwrapSDKContext(goCtx)
 
 	// check permission
-	if !k.Keeper.HasPermission(ctx, msg.GetSigners(), CanChangeTokenMapping) {
+	if !k.HasPermission(ctx, msg.GetSigners(), CanChangeTokenMapping) {
 		return nil, errors.Wrap(sdkerrors.ErrUnauthorized, "msg sender is not authorized")
 	}
 
 	// msg is already validated
-	if err := k.Keeper.RegisterOrUpdateTokenMapping(ctx, msg); err != nil {
+	if err := k.RegisterOrUpdateTokenMapping(ctx, msg); err != nil {
 		return nil, err
 	}
 	return &types.MsgUpdateTokenMappingResponse{}, nil
@@ -81,18 +83,7 @@ func (k msgServer) UpdateTokenMapping(goCtx context.Context, msg *types.MsgUpdat
 
 // TurnBridge implements the grpc method
 func (k msgServer) TurnBridge(goCtx context.Context, msg *types.MsgTurnBridge) (*types.MsgTurnBridgeResponse, error) {
-	ctx := sdk.UnwrapSDKContext(goCtx)
-
-	// check permission
-	if !k.Keeper.HasPermission(ctx, msg.GetSigners(), CanTurnBridge) {
-		return nil, errors.Wrap(sdkerrors.ErrUnauthorized, "msg sender is not authorized")
-	}
-
-	gravityParams := k.gravityKeeper.GetParams(ctx)
-	gravityParams.BridgeActive = msg.Enable
-	k.gravityKeeper.SetParams(ctx, gravityParams)
-
-	return &types.MsgTurnBridgeResponse{}, nil
+	return nil, nil
 }
 
 func (k msgServer) UpdateParams(goCtx context.Context, msg *types.MsgUpdateParams) (*types.MsgUpdateParamsResponse, error) {
@@ -122,4 +113,14 @@ func (k msgServer) UpdatePermissions(goCtx context.Context, msg *types.MsgUpdate
 	k.SetPermissions(ctx, acc, msg.Permissions)
 
 	return &types.MsgUpdatePermissionsResponse{}, nil
+}
+
+func (k msgServer) StoreBlockList(goCtx context.Context, msg *types.MsgStoreBlockList) (*types.MsgStoreBlockListResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	admin := k.Keeper.GetParams(ctx).CronosAdmin
+	if admin != msg.From {
+		return nil, errors.Wrap(sdkerrors.ErrUnauthorized, "msg sender is not authorized")
+	}
+	ctx.KVStore(k.storeKey).Set(types.KeyPrefixBlockList, msg.Blob)
+	return &types.MsgStoreBlockListResponse{}, nil
 }

@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"math/big"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	cronoskeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	cronoskeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	sdkmath "cosmossdk.io/math"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 var _ types.EvmLogHandler = SendToAccountHandler{}
@@ -78,7 +80,7 @@ func (h SendToAccountHandler) Handle(
 
 	contractAddr := sdk.AccAddress(contract.Bytes())
 	recipient := sdk.AccAddress(unpacked[0].(common.Address).Bytes())
-	coins := sdk.NewCoins(sdk.NewCoin(denom, sdk.NewIntFromBigInt(unpacked[1].(*big.Int))))
+	coins := sdk.NewCoins(sdk.NewCoin(denom, sdkmath.NewIntFromBigInt(unpacked[1].(*big.Int))))
 	err = h.bankKeeper.SendCoins(ctx, contractAddr, recipient, coins)
 	if err != nil {
 		return err

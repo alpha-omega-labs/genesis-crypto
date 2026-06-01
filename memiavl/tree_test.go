@@ -1,25 +1,32 @@
 package memiavl
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"testing"
 
-	db "github.com/cometbft/cometbft-db"
+	db "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/iavl"
 	"github.com/stretchr/testify/require"
+
+	"cosmossdk.io/log"
+	"cosmossdk.io/store/wrapper"
 )
 
 var (
-	ChangeSets  []iavl.ChangeSet
+	ChangeSets  []ChangeSet
 	RefHashes   [][]byte
 	ExpectItems [][]pair
+
+	IAVLInitialVersion      = 100
+	RefHashesInitialVersion [][]byte
 )
 
-func mockKVPairs(kvPairs ...string) []*iavl.KVPair {
-	result := make([]*iavl.KVPair, len(kvPairs)/2)
+func mockKVPairs(kvPairs ...string) []*KVPair {
+	result := make([]*KVPair, len(kvPairs)/2)
 	for i := 0; i < len(kvPairs); i += 2 {
-		result[i/2] = &iavl.KVPair{
+		result[i/2] = &KVPair{
 			Key:   []byte(kvPairs[i]),
 			Value: []byte(kvPairs[i+1]),
 		}
@@ -28,48 +35,65 @@ func mockKVPairs(kvPairs ...string) []*iavl.KVPair {
 }
 
 func init() {
-	ChangeSets = []iavl.ChangeSet{
+	ChangeSets = []ChangeSet{
 		{Pairs: mockKVPairs("hello", "world")},
 		{Pairs: mockKVPairs("hello", "world1", "hello1", "world1")},
 		{Pairs: mockKVPairs("hello2", "world1", "hello3", "world1")},
 	}
 
-	changes := iavl.ChangeSet{}
+	changes := ChangeSet{}
 	for i := 0; i < 1; i++ {
-		changes.Pairs = append(changes.Pairs, &iavl.KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Value: []byte("world1")})
+		changes.Pairs = append(changes.Pairs, &KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Value: []byte("world1")})
 	}
 
 	ChangeSets = append(ChangeSets, changes)
-	ChangeSets = append(ChangeSets, iavl.ChangeSet{Pairs: []*iavl.KVPair{{Key: []byte("hello"), Delete: true}, {Key: []byte("hello19"), Delete: true}}})
+	ChangeSets = append(ChangeSets, ChangeSet{Pairs: []*KVPair{{Key: []byte("hello"), Delete: true}, {Key: []byte("hello19"), Delete: true}}})
 
-	changes = iavl.ChangeSet{}
+	changes = ChangeSet{}
 	for i := 0; i < 21; i++ {
-		changes.Pairs = append(changes.Pairs, &iavl.KVPair{Key: []byte(fmt.Sprintf("aello%02d", i)), Value: []byte("world1")})
+		changes.Pairs = append(changes.Pairs, &KVPair{Key: []byte(fmt.Sprintf("aello%02d", i)), Value: []byte("world1")})
 	}
 	ChangeSets = append(ChangeSets, changes)
 
-	changes = iavl.ChangeSet{}
+	changes = ChangeSet{}
 	for i := 0; i < 21; i++ {
-		changes.Pairs = append(changes.Pairs, &iavl.KVPair{Key: []byte(fmt.Sprintf("aello%02d", i)), Delete: true})
+		changes.Pairs = append(changes.Pairs, &KVPair{Key: []byte(fmt.Sprintf("aello%02d", i)), Delete: true})
 	}
 	for i := 0; i < 19; i++ {
-		changes.Pairs = append(changes.Pairs, &iavl.KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Delete: true})
+		changes.Pairs = append(changes.Pairs, &KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Delete: true})
 	}
 	ChangeSets = append(ChangeSets, changes)
 
 	// generate ref hashes with ref impl
-	d := db.NewMemDB()
-	refTree, err := iavl.NewMutableTree(d, 0, true)
-	if err != nil {
-		panic(err)
-	}
+	d := wrapper.NewDBWrapper(db.NewMemDB())
+	refTree := iavl.NewMutableTree(d, 0, true, log.NewNopLogger())
+	refTreeInitialVersion := iavl.NewMutableTree(d, 0, true, log.NewNopLogger(), iavl.InitialVersionOption(uint64(IAVLInitialVersion)))
 	for _, changes := range ChangeSets {
+		{
+			if err := applyChangeSetRef(refTreeInitialVersion, changes); err != nil {
+				panic(err)
+			}
+			workingHash := refTreeInitialVersion.WorkingHash()
+			refHash, _, err := refTreeInitialVersion.SaveVersion()
+			if err != nil {
+				panic(err)
+			}
+			if !bytes.Equal(workingHash, refHash) {
+				panic(fmt.Sprintf("working hash %X != ref hash %X", workingHash, refHash))
+			}
+			RefHashesInitialVersion = append(RefHashesInitialVersion, refHash)
+		}
+
 		if err := applyChangeSetRef(refTree, changes); err != nil {
 			panic(err)
 		}
+		workingHash := refTree.WorkingHash()
 		refHash, _, err := refTree.SaveVersion()
 		if err != nil {
 			panic(err)
+		}
+		if !bytes.Equal(workingHash, refHash) {
+			panic(fmt.Sprintf("working hash %X != ref hash %X", workingHash, refHash))
 		}
 		RefHashes = append(RefHashes, refHash)
 	}
@@ -135,7 +159,7 @@ func init() {
 	}
 }
 
-func applyChangeSetRef(t *iavl.MutableTree, changes iavl.ChangeSet) error {
+func applyChangeSetRef(t *iavl.MutableTree, changes ChangeSet) error {
 	for _, change := range changes.Pairs {
 		if change.Delete {
 			if _, _, err := t.Remove(change.Key); err != nil {
@@ -155,10 +179,26 @@ func TestRootHashes(t *testing.T) {
 
 	for i, changes := range ChangeSets {
 		tree.ApplyChangeSet(changes)
+		workingHash := tree.RootHash()
 		hash, v, err := tree.SaveVersion(true)
 		require.NoError(t, err)
 		require.Equal(t, i+1, int(v))
 		require.Equal(t, RefHashes[i], hash)
+		require.Equal(t, hash, workingHash)
+	}
+}
+
+func TestRootHashesInitialVersion(t *testing.T) {
+	tree := NewWithInitialVersion(uint32(IAVLInitialVersion), 0)
+
+	for i, changes := range ChangeSets {
+		tree.ApplyChangeSet(changes)
+		workingHash := tree.RootHash()
+		hash, v, err := tree.SaveVersion(true)
+		require.NoError(t, err)
+		require.Equal(t, IAVLInitialVersion+i, int(v))
+		require.Equal(t, RefHashesInitialVersion[i], hash)
+		require.Equal(t, hash, workingHash)
 	}
 }
 
@@ -189,7 +229,7 @@ func TestEmptyTree(t *testing.T) {
 func TestTreeCopy(t *testing.T) {
 	tree := New(0)
 
-	tree.ApplyChangeSet(iavl.ChangeSet{Pairs: []*iavl.KVPair{
+	tree.ApplyChangeSet(ChangeSet{Pairs: []*KVPair{
 		{Key: []byte("hello"), Value: []byte("world")},
 	}})
 	_, _, err := tree.SaveVersion(true)
@@ -197,7 +237,7 @@ func TestTreeCopy(t *testing.T) {
 
 	snapshot := tree.Copy(0)
 
-	tree.ApplyChangeSet(iavl.ChangeSet{Pairs: []*iavl.KVPair{
+	tree.ApplyChangeSet(ChangeSet{Pairs: []*KVPair{
 		{Key: []byte("hello"), Value: []byte("world1")},
 	}})
 	_, _, err = tree.SaveVersion(true)
@@ -209,7 +249,7 @@ func TestTreeCopy(t *testing.T) {
 	// check that normal copy don't work
 	fakeSnapshot := *tree
 
-	tree.ApplyChangeSet(iavl.ChangeSet{Pairs: []*iavl.KVPair{
+	tree.ApplyChangeSet(ChangeSet{Pairs: []*KVPair{
 		{Key: []byte("hello"), Value: []byte("world2")},
 	}})
 	_, _, err = tree.SaveVersion(true)
@@ -225,16 +265,16 @@ func TestChangeSetMarshal(t *testing.T) {
 		bz, err := changes.Marshal()
 		require.NoError(t, err)
 
-		var cs iavl.ChangeSet
+		var cs ChangeSet
 		require.NoError(t, cs.Unmarshal(bz))
 		require.Equal(t, changes, cs)
 	}
 }
 
 func TestGetByIndex(t *testing.T) {
-	changes := iavl.ChangeSet{}
+	changes := ChangeSet{}
 	for i := 0; i < 20; i++ {
-		changes.Pairs = append(changes.Pairs, &iavl.KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Value: []byte(strconv.Itoa(i))})
+		changes.Pairs = append(changes.Pairs, &KVPair{Key: []byte(fmt.Sprintf("hello%02d", i)), Value: []byte(strconv.Itoa(i))})
 	}
 
 	tree := New(0)

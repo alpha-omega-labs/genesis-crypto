@@ -4,18 +4,21 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cometbft/cometbft/libs/log"
-	"github.com/cosmos/cosmos-sdk/codec"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	channeltypes "github.com/cosmos/ibc-go/v10/modules/core/04-channel/types"
+	cronosevents "github.com/crypto-org-chain/cronos/v2/x/cronos/events"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/precompile/relayer"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 
+	"cosmossdk.io/log"
+
+	"github.com/cosmos/cosmos-sdk/codec"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
-	cronosevents "github.com/crypto-org-chain/cronos/v2/x/cronos/events"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/precompile/relayer"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 )
 
 var (
@@ -26,38 +29,28 @@ var (
 )
 
 const (
-	CreateClient                         = "createClient"
-	UpdateClient                         = "updateClient"
-	UpgradeClient                        = "upgradeClient"
-	SubmitMisbehaviour                   = "submitMisbehaviour"
-	ConnectionOpenInit                   = "connectionOpenInit"
-	ConnectionOpenTry                    = "connectionOpenTry"
-	ConnectionOpenAck                    = "connectionOpenAck"
-	ConnectionOpenConfirm                = "connectionOpenConfirm"
-	ChannelOpenInit                      = "channelOpenInit"
-	ChannelOpenTry                       = "channelOpenTry"
-	ChannelOpenAck                       = "channelOpenAck"
-	ChannelOpenConfirm                   = "channelOpenConfirm"
-	ChannelCloseInit                     = "channelCloseInit"
-	ChannelCloseConfirm                  = "channelCloseConfirm"
-	RecvPacket                           = "recvPacket"
-	Acknowledgement                      = "acknowledgement"
-	Timeout                              = "timeout"
-	TimeoutOnClose                       = "timeoutOnClose"
-	UpdateClientAndConnectionOpenInit    = "updateClientAndConnectionOpenInit"
-	UpdateClientAndConnectionOpenTry     = "updateClientAndConnectionOpenTry"
-	UpdateClientAndConnectionOpenAck     = "updateClientAndConnectionOpenAck"
-	UpdateClientAndConnectionOpenConfirm = "updateClientAndConnectionOpenConfirm"
-	UpdateClientAndChannelOpenInit       = "updateClientAndChannelOpenInit"
-	UpdateClientAndChannelOpenTry        = "updateClientAndChannelOpenTry"
-	UpdateClientAndChannelOpenAck        = "updateClientAndChannelOpenAck"
-	UpdateClientAndChannelCloseInit      = "updateClientAndChannelCloseInit"
-	UpdateClientAndChannelCloseConfirm   = "updateClientAndChannelCloseConfirm"
-	UpdateClientAndChannelOpenConfirm    = "updateClientAndChannelOpenConfirm"
-	UpdateClientAndRecvPacket            = "updateClientAndRecvPacket"
-	UpdateClientAndAcknowledgement       = "updateClientAndAcknowledgement"
-	UpdateClientAndTimeout               = "updateClientAndTimeout"
-	UpdateClientAndTimeoutOnClose        = "updateClientAndTimeoutOnClose"
+	CreateClient                    = "createClient"
+	UpdateClient                    = "updateClient"
+	UpgradeClient                   = "upgradeClient"
+	SubmitMisbehaviour              = "submitMisbehaviour"
+	ConnectionOpenInit              = "connectionOpenInit"
+	ConnectionOpenTry               = "connectionOpenTry"
+	ConnectionOpenAck               = "connectionOpenAck"
+	ConnectionOpenConfirm           = "connectionOpenConfirm"
+	ChannelOpenInit                 = "channelOpenInit"
+	ChannelOpenTry                  = "channelOpenTry"
+	ChannelOpenAck                  = "channelOpenAck"
+	ChannelOpenConfirm              = "channelOpenConfirm"
+	ChannelCloseInit                = "channelCloseInit"
+	ChannelCloseConfirm             = "channelCloseConfirm"
+	RecvPacket                      = "recvPacket"
+	Acknowledgement                 = "acknowledgement"
+	Timeout                         = "timeout"
+	TimeoutOnClose                  = "timeoutOnClose"
+	RegisterPayee                   = "registerPayee"
+	RegisterCounterpartyPayee       = "registerCounterpartyPayee"
+	GasWhenReceiverChainIsSource    = 51705
+	GasWhenReceiverChainIsNotSource = 144025
 )
 
 func init() {
@@ -93,35 +86,15 @@ func init() {
 		case ChannelCloseConfirm:
 			relayerGasRequiredByMethod[methodID] = 31199
 		case RecvPacket:
-			relayerGasRequiredByMethod[methodID] = 144025
+			relayerGasRequiredByMethod[methodID] = GasWhenReceiverChainIsNotSource
 		case Acknowledgement:
 			relayerGasRequiredByMethod[methodID] = 61781
 		case Timeout:
 			relayerGasRequiredByMethod[methodID] = 104283
-		case UpdateClientAndConnectionOpenTry:
-			relayerGasRequiredByMethod[methodID] = 150362
-		case UpdateClientAndConnectionOpenConfirm:
-			relayerGasRequiredByMethod[methodID] = 124820
-		case UpdateClientAndChannelOpenTry:
-			relayerGasRequiredByMethod[methodID] = 182676
-		case UpdateClientAndChannelOpenConfirm:
-			relayerGasRequiredByMethod[methodID] = 132734
-		case UpdateClientAndRecvPacket:
-			relayerGasRequiredByMethod[methodID] = 257120
-		case UpdateClientAndConnectionOpenInit:
-			relayerGasRequiredByMethod[methodID] = 131649
-		case UpdateClientAndConnectionOpenAck:
-			relayerGasRequiredByMethod[methodID] = 141558
-		case UpdateClientAndChannelOpenInit:
-			relayerGasRequiredByMethod[methodID] = 180815
-		case UpdateClientAndChannelOpenAck:
-			relayerGasRequiredByMethod[methodID] = 133834
-		case UpdateClientAndChannelCloseConfirm:
-			relayerGasRequiredByMethod[methodID] = 143366
-		case UpdateClientAndTimeout:
-			relayerGasRequiredByMethod[methodID] = 230638
-		case UpdateClientAndAcknowledgement:
-			relayerGasRequiredByMethod[methodID] = 174785
+		case RegisterPayee:
+			relayerGasRequiredByMethod[methodID] = 38000
+		case RegisterCounterpartyPayee:
+			relayerGasRequiredByMethod[methodID] = 37000
 		default:
 			relayerGasRequiredByMethod[methodID] = 100000
 		}
@@ -165,7 +138,30 @@ func (bc *RelayerContract) RequiredGas(input []byte) (gas uint64) {
 	var methodID [4]byte
 	copy(methodID[:], input[:4])
 	requiredGas, ok := relayerGasRequiredByMethod[methodID]
-	intrinsicGas, _ := core.IntrinsicGas(input, nil, false, bc.isHomestead, bc.isIstanbul, bc.isShanghai)
+	method, err := irelayerABI.MethodById(methodID[:])
+	if err != nil {
+		panic(err)
+	}
+	if method.Name == RecvPacket {
+		args, err := method.Inputs.Unpack(input[4:])
+		if err != nil {
+			panic(err)
+		}
+		i := args[0].([]byte)
+		var msg channeltypes.MsgRecvPacket
+		if err = bc.cdc.Unmarshal(i, &msg); err != nil {
+			panic(err)
+		}
+		var data ibctransfertypes.FungibleTokenPacketData
+		if err = ibctransfertypes.ModuleCdc.UnmarshalJSON(msg.Packet.GetData(), &data); err != nil {
+			panic(err)
+		}
+		denom := ibctransfertypes.ExtractDenomFromPath(data.Denom)
+		if denom.HasPrefix(msg.Packet.GetSourcePort(), msg.Packet.GetSourceChannel()) {
+			requiredGas = GasWhenReceiverChainIsSource
+		}
+	}
+	intrinsicGas, _ := core.IntrinsicGas(input, nil, nil, false, bc.isHomestead, bc.isIstanbul, bc.isShanghai)
 	defer func() {
 		methodName := relayerMethodNamedByMethod[methodID]
 		bc.logger.Debug("required", "gas", gas, "method", methodName, "len", inputLen, "intrinsic", intrinsicGas)
@@ -194,25 +190,21 @@ func (bc *RelayerContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool
 		return nil, err
 	}
 	stateDB := evm.StateDB.(ExtStateDB)
-
 	var res []byte
 	precompileAddr := bc.Address()
 	args, err := method.Inputs.Unpack(contract.Input[4:])
 	if err != nil {
 		return nil, errors.New("fail to unpack input arguments")
 	}
-	input := args[0].([]byte)
 	converter := cronosevents.RelayerConvertEvent
+	input := args[0].([]byte)
 	e := &Executor{
 		cdc:       bc.cdc,
 		stateDB:   stateDB,
-		caller:    contract.CallerAddress,
+		caller:    contract.Caller(),
 		contract:  precompileAddr,
 		input:     input,
 		converter: converter,
-	}
-	if len(args) > 1 {
-		e.input2 = args[1].([]byte)
 	}
 	switch method.Name {
 	case CreateClient:
@@ -221,8 +213,6 @@ func (bc *RelayerContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool
 		res, err = exec(e, bc.ibcKeeper.UpdateClient)
 	case UpgradeClient:
 		res, err = exec(e, bc.ibcKeeper.UpgradeClient)
-	case SubmitMisbehaviour:
-		res, err = exec(e, bc.ibcKeeper.SubmitMisbehaviour)
 	case ConnectionOpenInit:
 		res, err = exec(e, bc.ibcKeeper.ConnectionOpenInit)
 	case ConnectionOpenTry:
@@ -251,34 +241,6 @@ func (bc *RelayerContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool
 		res, err = exec(e, bc.ibcKeeper.Timeout)
 	case TimeoutOnClose:
 		res, err = exec(e, bc.ibcKeeper.TimeoutOnClose)
-	case UpdateClientAndConnectionOpenInit:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ConnectionOpenInit)
-	case UpdateClientAndConnectionOpenTry:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ConnectionOpenTry)
-	case UpdateClientAndConnectionOpenAck:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ConnectionOpenAck)
-	case UpdateClientAndConnectionOpenConfirm:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ConnectionOpenConfirm)
-	case UpdateClientAndChannelOpenInit:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelOpenInit)
-	case UpdateClientAndChannelOpenTry:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelOpenTry)
-	case UpdateClientAndChannelCloseInit:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelCloseInit)
-	case UpdateClientAndChannelCloseConfirm:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelCloseConfirm)
-	case UpdateClientAndChannelOpenAck:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelOpenAck)
-	case UpdateClientAndChannelOpenConfirm:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.ChannelOpenConfirm)
-	case UpdateClientAndRecvPacket:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.RecvPacket)
-	case UpdateClientAndAcknowledgement:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.Acknowledgement)
-	case UpdateClientAndTimeout:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.Timeout)
-	case UpdateClientAndTimeoutOnClose:
-		res, err = execMultiple(e, bc.ibcKeeper.UpdateClient, bc.ibcKeeper.TimeoutOnClose)
 	default:
 		return nil, fmt.Errorf("unknown method: %s", method.Name)
 	}

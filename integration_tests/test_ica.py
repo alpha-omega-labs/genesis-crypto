@@ -1,14 +1,16 @@
 import json
 
 import pytest
-from pystarport import cluster
 
+from .cosmoscli import module_address
 from .ibc_utils import (
+    ChannelOrder,
     Status,
     deploy_contract,
     funds_ica,
+    gen_query_balance_packet,
     gen_send_msg,
-    ica_ctrl_send_tx,
+    ica_send_tx,
     parse_events_rpc,
     prepare_network,
     register_acc,
@@ -16,7 +18,7 @@ from .ibc_utils import (
     wait_for_check_tx,
     wait_for_status_change,
 )
-from .utils import CONTRACTS, wait_for_fn
+from .utils import CONTRACTS, approve_proposal, wait_for_fn
 
 pytestmark = pytest.mark.ica
 
@@ -31,17 +33,22 @@ def ibc(request, tmp_path_factory):
         name,
         incentivized=False,
         connection_only=True,
-        relayer=cluster.Relayer.RLY.value,
     )
 
 
-def test_ica(ibc, tmp_path):
+@pytest.mark.parametrize(
+    "order", [ChannelOrder.ORDERED.value, ChannelOrder.UNORDERED.value]
+)
+def test_ica(ibc, order, tmp_path):
+    signer = "signer2" if order == ChannelOrder.ORDERED.value else "community"
     connid = "connection-0"
     cli_host = ibc.chainmain.cosmos_cli()
     cli_controller = ibc.cronos.cosmos_cli()
-    ica_address, channel_id = register_acc(cli_controller, connid)
-    balance = funds_ica(cli_host, ica_address)
-    to = cli_host.address("signer2")
+    ica_address, port_id, channel_id = register_acc(
+        cli_controller, connid, ordering=order, signer=signer
+    )
+    balance = funds_ica(cli_host, ica_address, signer=signer)
+    to = cli_host.address(signer)
     amount = 1000
     denom = "basecro"
     jsonfile = CONTRACTS["TestICA"]
@@ -50,7 +57,7 @@ def test_ica(ibc, tmp_path):
     seq = 1
     msg_num = 10
     assert tcontract.caller.getStatus(channel_id, seq) == Status.PENDING
-    res = ica_ctrl_send_tx(
+    res = ica_send_tx(
         cli_host,
         cli_controller,
         connid,
@@ -60,6 +67,7 @@ def test_ica(ibc, tmp_path):
         denom,
         amount,
         memo={"src_callback": {"address": tcontract.address}},
+        signer=signer,
     )
     assert res == seq, res
     balance -= amount * msg_num
@@ -68,7 +76,7 @@ def test_ica(ibc, tmp_path):
     assert tcontract.caller.getStatus(channel_id, seq) == Status.PENDING
 
     def check_for_ack():
-        criteria = "message.action=/ibc.core.channel.v1.MsgAcknowledgement"
+        criteria = "message.action='/ibc.core.channel.v1.MsgAcknowledgement'"
         return cli_controller.tx_search(criteria)["txs"]
 
     txs = wait_for_fn("ack change", check_for_ack)
@@ -76,49 +84,102 @@ def test_ica(ibc, tmp_path):
     err = events.get("ibc_src_callback")["callback_error"]
     assert "sender is not authenticated" in err, err
 
-    def generated_tx_txt(msg_num):
-        # generate a transaction to send to host chain
-        generated_tx = tmp_path / "generated_tx.txt"
-        m = gen_send_msg(ica_address, to, denom, amount)
-        msgs = []
-        for i in range(msg_num):
-            msgs.append(m)
-        generated_tx_msg = {
-            "body": {
-                "messages": msgs,
-            },
-        }
-        generated_tx.write_text(json.dumps(generated_tx_msg))
-        return generated_tx
-
     no_timeout = 60
 
     def submit_msgs(msg_num, timeout_in_s=no_timeout, gas="200000"):
         num_txs = len(cli_host.query_all_txs(ica_address)["txs"])
+        # generate a transaction to send to host chain
+        m = gen_send_msg(ica_address, to, denom, amount)
+        msgs = []
+        for i in range(msg_num):
+            msgs.append(m)
+        data = json.dumps(msgs)
+        packet = cli_controller.ica_generate_packet_data(data)
         # submit transaction on host chain on behalf of interchain account
-        rsp = cli_controller.icaauth_submit_tx(
+        rsp = cli_controller.ica_send_tx(
             connid,
-            generated_tx_txt(msg_num),
-            timeout_duration=f"{timeout_in_s}s",
+            json.dumps(packet),
+            timeout_in_ns=int(timeout_in_s * 1e9),
             gas=gas,
-            from_="signer2",
+            from_=signer,
         )
         assert rsp["code"] == 0, rsp["raw_log"]
-        timeout = timeout_in_s + 3 if timeout_in_s < no_timeout else None
+        timeout = timeout_in_s if timeout_in_s < no_timeout else None
         wait_for_check_tx(cli_host, ica_address, num_txs, timeout)
 
-    # submit large txs to trigger timeout
+    # submit large txs to trigger close channel with small timeout for order channel
     msg_num = 140
-    submit_msgs(msg_num, 5, "600000")
+    submit_msgs(msg_num, 0.005, "600000")
     assert cli_host.balance(ica_address, denom=denom) == balance
-    wait_for_check_channel_ready(cli_controller, connid, channel_id, "STATE_CLOSED")
-    # reopen ica account after channel get closed
-    ica_address2, channel_id2 = register_acc(cli_controller, connid)
-    assert ica_address2 == ica_address, ica_address2
-    assert channel_id2 != channel_id, channel_id2
+    if order == ChannelOrder.UNORDERED.value:
+        # regiser new account for unordered channel, will not update the original
+        # channel.
+        register_acc(cli_controller, connid)
+    else:
+        # rly: ibc_upgrade_channels not work
+        return
+        wait_for_check_channel_ready(cli_controller, connid, channel_id, "STATE_CLOSED")
+        # reopen ica account after channel get closed
+        ica_address2, port_id2, channel_id2 = register_acc(cli_controller, connid)
+        assert ica_address2 == ica_address, ica_address2
+        assert channel_id2 != channel_id, channel_id2
+        # upgrade to unordered channel
+        channel = cli_controller.ibc_query_channel(port_id2, channel_id2)
+        version_data = json.loads(channel["channel"]["version"])
+        community = "community"
+        authority = module_address("gov")
+        deposit = "1basetcro"
+        proposal_json = cli_controller.ibc_upgrade_channels(
+            json.loads(version_data["app_version"]),
+            community,
+            deposit=deposit,
+            title="channel-upgrade-title",
+            summary="summary",
+            port_pattern=port_id2,
+            channel_ids=channel_id2,
+        )
+        proposal_json["deposit"] = deposit
+        proposal_json["proposer"] = authority
+        proposal_json["messages"][0]["signer"] = authority
+        proposal_json["messages"][0]["fields"][
+            "ordering"
+        ] = ChannelOrder.UNORDERED.value
+        rsp = cli_controller.submit_gov_proposal(
+            "community", "submit-proposal", proposal_json, broadcast_mode="sync"
+        )
+        assert rsp["code"] == 0, rsp["raw_log"]
+        approve_proposal(
+            ibc.cronos, rsp["events"], msg="ibc.core.channel.v1.MsgChannelUpgradeInit"
+        )
+        wait_for_check_channel_ready(
+            cli_controller, connid, channel_id2, "STATE_FLUSHCOMPLETE"
+        )
+        wait_for_check_channel_ready(cli_controller, connid, channel_id2)
+        # submit large txs to trigger close channel with small timeout for order channel
+        msg_num = 140
+        submit_msgs(msg_num, 0.005, "600000")
+        assert cli_host.balance(ica_address, denom=denom) == balance
+        with pytest.raises(AssertionError) as exc:
+            register_acc(cli_controller, connid)
+        assert "existing active channel" in str(exc.value)
+
     # submit normal txs should work
     msg_num = 2
     submit_msgs(msg_num)
     balance -= amount * msg_num
     # check if the funds are reduced in interchain account
     assert cli_host.balance(ica_address, denom=denom) == balance
+    call_module_safe_query(cli_controller, connid, signer, ica_address)
+
+
+def call_module_safe_query(cli, connid, signer, ica_address):
+    packet = gen_query_balance_packet(cli, ica_address)
+    timeout = 60  # in seconds
+    rsp = cli.ica_send_tx(
+        connid,
+        json.dumps(packet),
+        timeout_in_ns=int(timeout * 1e9),
+        gas=200000,
+        from_=signer,
+    )
+    assert rsp["code"] == 0, rsp

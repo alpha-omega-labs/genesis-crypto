@@ -40,7 +40,8 @@ cd $REPO_ROOT
 # System update and installation of dependencies
 . ./setup/dependencies.sh
 
-# Migrate configs from v1.0.0 to v1.1.1 (see: https://github.com/crypto-org-chain/cronos/releases/tag/v1.1.0)
+# Migrate configs from v1.1.1 to v1.6.2 (see: https://github.com/crypto-org-chain/cronos/releases/tag/v1.4.0,
+# https://github.com/crypto-org-chain/cronos/releases/tag/v1.5.0 and https://github.com/crypto-org-chain/cronos/releases/tag/v1.6.1)
 sh ./setup/migrate-configs.sh "$CONFIG_DIR/config.toml" "$CONFIG_DIR/app.toml"
 
 # Install binaries

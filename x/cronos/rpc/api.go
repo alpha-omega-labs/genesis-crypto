@@ -6,10 +6,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/cometbft/cometbft/libs/log"
 	coretypes "github.com/cometbft/cometbft/rpc/core/types"
-	"github.com/cosmos/cosmos-sdk/client"
-	"github.com/cosmos/cosmos-sdk/server"
 	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -22,6 +19,11 @@ import (
 	rpctypes "github.com/evmos/ethermint/rpc/types"
 	ethermint "github.com/evmos/ethermint/types"
 	evmtypes "github.com/evmos/ethermint/x/evm/types"
+
+	"cosmossdk.io/log"
+
+	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/server"
 )
 
 const (
@@ -138,7 +140,7 @@ func (api *CronosAPI) GetTransactionReceiptsByBlock(blockNrOrHash rpctypes.Block
 
 		parsedTxs, err := rpctypes.ParseTxResult(txResult, tx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse tx events: %d:%d, %v", resBlock.Block.Height, i, err)
+			return nil, fmt.Errorf("failed to parse tx events: %d:%d, %w", resBlock.Block.Height, i, err)
 		}
 
 		if len(parsedTxs.Txs) == 0 {
@@ -159,12 +161,7 @@ func (api *CronosAPI) GetTransactionReceiptsByBlock(blockNrOrHash rpctypes.Block
 				return nil, fmt.Errorf("invalid tx type: %T", msg)
 			}
 
-			txData, err := evmtypes.UnpackTxData(ethMsg.Data)
-			if err != nil {
-				api.logger.Error("failed to unpack tx data", "error", err.Error())
-				return nil, err
-			}
-
+			txData := ethMsg.AsTransaction()
 			parsedTx := parsedTxs.GetTxByMsgIndex(msgIndex)
 
 			// Get the transaction result from the log
@@ -174,13 +171,12 @@ func (api *CronosAPI) GetTransactionReceiptsByBlock(blockNrOrHash rpctypes.Block
 			} else {
 				status = hexutil.Uint(ethtypes.ReceiptStatusSuccessful)
 			}
-
-			from, err := ethMsg.GetSenderLegacy(api.chainIDEpoch)
+			from, err := ethMsg.GetSenderLegacy(ethtypes.LatestSignerForChainID(api.chainIDEpoch))
 			if err != nil {
 				return nil, err
 			}
 
-			logs, err := evmtypes.DecodeMsgLogsFromEvents(txResult.Data, parsedTx.MsgIndex, uint64(blockRes.Height))
+			logs, err := evmtypes.DecodeMsgLogsFromEvents(txResult.Data, txResult.Events, parsedTx.MsgIndex, uint64(blockRes.Height))
 			if err != nil {
 				api.logger.Debug("failed to parse logs", "block", resBlock.Block.Height, "txIndex", txIndex, "msgIndex", msgIndex, "error", err.Error())
 			}
@@ -193,12 +189,12 @@ func (api *CronosAPI) GetTransactionReceiptsByBlock(blockNrOrHash rpctypes.Block
 				// Consensus fields: These fields are defined by the Yellow Paper
 				"status":            status,
 				"cumulativeGasUsed": hexutil.Uint64(cumulativeGasUsed + msgCumulativeGasUsed),
-				"logsBloom":         ethtypes.BytesToBloom(ethtypes.LogsBloom(logs)),
+				"logsBloom":         ethtypes.CreateBloom(&ethtypes.Receipt{Logs: logs}),
 				"logs":              logs,
 
 				// Implementation fields: These fields are added by geth when processing a transaction.
 				// They are stored in the chain database.
-				"transactionHash": ethMsg.Hash,
+				"transactionHash": txData.Hash(),
 				"contractAddress": nil,
 				"gasUsed":         hexutil.Uint64(parsedTx.GasUsed),
 
@@ -210,21 +206,18 @@ func (api *CronosAPI) GetTransactionReceiptsByBlock(blockNrOrHash rpctypes.Block
 
 				// sender and receiver (contract or EOA) addreses
 				"from": from,
-				"to":   txData.GetTo(),
-				"type": hexutil.Uint(ethMsg.AsTransaction().Type()),
+				"to":   txData.To(),
+				"type": hexutil.Uint(txData.Type()),
 			}
 
 			// If the to is empty, assume it is a contract creation
-			if txData.GetTo() == nil {
-				receipt["contractAddress"] = crypto.CreateAddress(from, txData.GetNonce())
+			if txData.To() == nil {
+				receipt["contractAddress"] = crypto.CreateAddress(from, txData.Nonce())
 			}
-
-			if dynamicTx, ok := txData.(*evmtypes.DynamicFeeTx); ok {
-				receipt["effectiveGasPrice"] = hexutil.Big(*dynamicTx.EffectiveGasPrice(baseFee))
+			if txData.Type() == ethtypes.DynamicFeeTxType {
+				receipt["effectiveGasPrice"] = hexutil.Big(*ethMsg.GetEffectiveGasPrice(baseFee))
 			}
-
 			receipts = append(receipts, receipt)
-
 			txIndex++
 		}
 		cumulativeGasUsed += msgCumulativeGasUsed
@@ -313,7 +306,7 @@ func (api *CronosAPI) ReplayBlock(blockNrOrHash rpctypes.BlockNumberOrHash, post
 			status = hexutil.Uint(ethtypes.ReceiptStatusSuccessful)
 		}
 
-		from, err := ethMsg.GetSenderLegacy(api.chainIDEpoch)
+		from, err := ethMsg.GetSenderLegacy(ethtypes.LatestSignerForChainID(api.chainIDEpoch))
 		if err != nil {
 			return nil, err
 		}
@@ -329,7 +322,7 @@ func (api *CronosAPI) ReplayBlock(blockNrOrHash rpctypes.BlockNumberOrHash, post
 			// Consensus fields: These fields are defined by the Yellow Paper
 			"status":            status,
 			"cumulativeGasUsed": hexutil.Uint64(cumulativeGasUsed),
-			"logsBloom":         ethtypes.BytesToBloom(ethtypes.LogsBloom(logs)),
+			"logsBloom":         ethtypes.CreateBloom(&ethtypes.Receipt{Logs: logs}),
 			"logs":              logs,
 
 			// Implementation fields: These fields are added by geth when processing a transaction.
@@ -367,7 +360,7 @@ func (api *CronosAPI) ReplayBlock(blockNrOrHash rpctypes.BlockNumberOrHash, post
 		idx := len(receipts) - 1
 		receipts[idx]["status"] = hexutil.Uint(ethtypes.ReceiptStatusFailed)
 		receipts[idx]["logs"] = []*ethtypes.Log{}
-		receipts[idx]["logsBloom"] = ethtypes.BytesToBloom(ethtypes.LogsBloom(nil))
+		receipts[idx]["logsBloom"] = ethtypes.CreateBloom(&ethtypes.Receipt{Logs: []*ethtypes.Log{}})
 		receipts[idx]["contractAddress"] = nil
 		// the fee is deducted by the gas limit, so we patch the gasUsed to gasLimit
 		refundedGas := msgs[idx].GetGas() - uint64(receipts[idx]["gasUsed"].(hexutil.Uint64))

@@ -3,26 +3,79 @@ package app
 import (
 	"fmt"
 
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	evmtypes "github.com/evmos/ethermint/x/evm/types"
+
+	"cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	"github.com/cosmos/cosmos-sdk/x/auth/signing"
 )
 
 // BlockAddressesDecorator block addresses from sending transactions
 type BlockAddressesDecorator struct {
 	blockedMap map[string]struct{}
+	getParams  func(ctx sdk.Context) types.Params
 }
 
-func NewBlockAddressesDecorator(blacklist map[string]struct{}) BlockAddressesDecorator {
+func NewBlockAddressesDecorator(
+	blacklist map[string]struct{},
+	getParams func(ctx sdk.Context) types.Params,
+) BlockAddressesDecorator {
 	return BlockAddressesDecorator{
 		blockedMap: blacklist,
+		getParams:  getParams,
 	}
 }
 
 func (bad BlockAddressesDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, next sdk.AnteHandler) (newCtx sdk.Context, err error) {
 	if ctx.IsCheckTx() {
+		if sigTx, ok := tx.(signing.SigVerifiableTx); ok {
+			signers, err := sigTx.GetSigners()
+			if err != nil {
+				return ctx, err
+			}
+			for _, signer := range signers {
+				if _, ok := bad.blockedMap[sdk.AccAddress(signer).String()]; ok {
+					return ctx, fmt.Errorf("signer is blocked: %s", sdk.AccAddress(signer).String())
+				}
+			}
+		}
+
 		for _, msg := range tx.GetMsgs() {
-			for _, signer := range msg.GetSigners() {
-				if _, ok := bad.blockedMap[string(signer)]; ok {
-					return ctx, fmt.Errorf("signer is blocked: %s", signer.String())
+			msgEthTx, ok := msg.(*evmtypes.MsgEthereumTx)
+			if ok {
+				ethTx := msgEthTx.AsTransaction()
+				// check the destination address
+				if ethTx.To() != nil {
+					if _, ok := bad.blockedMap[sdk.AccAddress(ethTx.To().Bytes()).String()]; ok {
+						return ctx, fmt.Errorf("destination address is blocked: %s", sdk.AccAddress(ethTx.To().Bytes()).String())
+					}
+				}
+				// check EIP-7702 authorisation list
+				if ethTx.SetCodeAuthorizations() != nil {
+					for _, auth := range ethTx.SetCodeAuthorizations() {
+						addr, err := auth.Authority()
+						if err == nil {
+							if _, ok := bad.blockedMap[sdk.AccAddress(addr.Bytes()).String()]; ok {
+								return ctx, fmt.Errorf("signer is blocked: %s", addr.String())
+							}
+						}
+						// check the target address
+						if _, ok := bad.blockedMap[sdk.AccAddress(auth.Address.Bytes()).String()]; ok {
+							return ctx, fmt.Errorf("authorisation address is blocked: %s", sdk.AccAddress(auth.Address.Bytes()).String())
+						}
+					}
+				}
+			}
+		}
+
+		admin := bad.getParams(ctx).CronosAdmin
+		for _, msg := range tx.GetMsgs() {
+			if blocklistMsg, ok := msg.(*types.MsgStoreBlockList); ok {
+				if admin != blocklistMsg.From {
+					return ctx, errors.Wrap(sdkerrors.ErrUnauthorized, "msg sender is not authorized")
 				}
 			}
 		}

@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# Migrates configs from v1.0.0 to 1.1.1
-# https://github.com/crypto-org-chain/cronos/releases/tag/v1.1.0
-# Optionally uses configs in /configs folder.
+# Migrates configs from v1.1.1 to 1.6.2
+# https://github.com/crypto-org-chain/cronos/releases/tag/v1.4.0
+# https://github.com/crypto-org-chain/cronos/releases/tag/v1.5.0
+# https://github.com/crypto-org-chain/cronos/releases/tag/v1.6.1
 
 set -e
 if [ -z "$1" ] || [ -z "$2" ]; then

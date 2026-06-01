@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/release-24.11";
     flake-utils.url = "github:numtide/flake-utils";
     nix-bundle-exe = {
       url = "github:3noch/nix-bundle-exe";
@@ -18,7 +18,15 @@
     };
   };
 
-  outputs = { self, nixpkgs, nix-bundle-exe, gomod2nix, flake-utils, poetry2nix }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      nix-bundle-exe,
+      gomod2nix,
+      flake-utils,
+      poetry2nix,
+    }:
     let
       rev = self.shortRev or "dirty";
       mkApp = drv: {
@@ -26,113 +34,63 @@
         program = "${drv}/bin/${drv.meta.mainProgram}";
       };
     in
-    (flake-utils.lib.eachDefaultSystem
-      (system:
-        let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [
-              (import ./nix/build_overlay.nix)
-              poetry2nix.overlays.default
-              gomod2nix.overlays.default
-              self.overlay
-            ];
-            config = { };
+    (flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = self.overlays.default;
+          config = { };
+        };
+      in
+      rec {
+        packages = pkgs.cronos-matrix // {
+          inherit (pkgs) rocksdb testground-image;
+        };
+        apps = {
+          genesisd = mkApp packages.genesisd;
+          genesisd-testnet = mkApp packages.genesisd-testnet;
+          stateless-testcase = {
+            type = "app";
+            program = "${pkgs.benchmark-testcase}/bin/stateless-testcase";
           };
-        in
-        rec {
-          packages = pkgs.cronos-matrix // {
-            inherit (pkgs) rocksdb;
-          };
-          apps = {
-            genesisd = mkApp packages.genesisd;
-            genesisd-testnet = mkApp packages.genesisd-testnet;
-          };
-          defaultPackage = packages.genesisd;
-          defaultApp = apps.genesisd;
-          devShells = {
-            default = pkgs.mkShell {
-              buildInputs = [
-                defaultPackage.go
-                pkgs.gomod2nix
-              ];
-            };
-            rocksdb = pkgs.mkShell {
-              buildInputs = [
-                defaultPackage.go
-                pkgs.gomod2nix
-                pkgs.rocksdb
-              ];
-            };
-            full = pkgs.mkShell {
-              buildInputs = [
-                defaultPackage.go
-                pkgs.gomod2nix
-                pkgs.rocksdb
-                pkgs.test-env
-              ];
-            };
-          };
-          legacyPackages = pkgs;
-        }
-      )
-    ) // {
-      overlay = final: super: {
-        go = super.go_1_22;
-        test-env = final.callPackage ./nix/testenv.nix { };
-        bundle-exe = final.pkgsBuildBuild.callPackage nix-bundle-exe { };
-        # make-tarball don't follow symbolic links to avoid duplicate file, the bundle should have no external references.
-        # reset the ownership and permissions to make the extract result more normal.
-        make-tarball = drv: final.runCommand "tarball-${drv.name}"
-          {
-            nativeBuildInputs = with final.buildPackages; [ gnutar gzip ];
-          } ''
-          tar cfv - -C "${drv}" \
-            --owner=0 --group=0 --mode=u+rw,uga+r --hard-dereference . \
-            | gzip -9 > $out
-        '';
-        bundle-win-exe = drv: final.callPackage ./nix/bundle-win-exe.nix { cronosd = drv; };
-      } // (with final;
-        let
-          matrix = lib.cartesianProductOfSets {
-            network = [ "mainnet" "testnet" ];
-            pkgtype = [
-              "nix" # normal nix package
-              "bundle" # relocatable bundled package
-              "tarball" # tarball of the bundle, for distribution and checksum
+        };
+        defaultPackage = packages.genesisd;
+        defaultApp = apps.genesisd;
+        devShells = rec {
+          default = pkgs.mkShell {
+            buildInputs = [
+              defaultPackage.go
+              pkgs.gomod2nix
+              pkgs.nixfmt-rfc-style
             ];
           };
-          binaries = builtins.listToAttrs (builtins.map
-            ({ network, pkgtype }: {
-              name = builtins.concatStringsSep "-" (
-                [ "genesisd" ] ++
-                lib.optional (network != "mainnet") network ++
-                lib.optional (pkgtype != "nix") pkgtype
-              );
-              value =
-                let
-                  genesisd = callPackage ./. {
-                    inherit rev network;
-                  };
-                  bundle =
-                    if stdenv.hostPlatform.isWindows then
-                      bundle-win-exe genesisd
-                    else
-                      bundle-exe genesisd;
-                in
-                if pkgtype == "bundle" then
-                  bundle
-                else if pkgtype == "tarball" then
-                  make-tarball bundle
-                else
-                  genesisd;
-            })
-            matrix
-          );
-        in
-        {
-          cronos-matrix = binaries;
-        }
-      );
+          rocksdb = pkgs.mkShell {
+            buildInputs = default.buildInputs ++ [
+              pkgs.rocksdb
+              pkgs.rocksdb.tools
+            ];
+          };
+          full = pkgs.mkShell { buildInputs = rocksdb.buildInputs ++ [ pkgs.test-env ]; };
+        };
+        legacyPackages = pkgs;
+      }
+    ))
+    // {
+      overlays.default = [
+        (import ./nix/build_overlay.nix)
+        poetry2nix.overlays.default
+        gomod2nix.overlays.default
+        (import ./testground/benchmark/overlay.nix)
+        (final: super: {
+          go = super.go_1_23;
+          test-env = final.callPackage ./nix/testenv.nix { };
+          cronos-matrix = final.callPackage ./nix/cronos-matrix.nix {
+            inherit rev;
+            bundle-exe = final.pkgsBuildBuild.callPackage nix-bundle-exe { };
+          };
+          testground-image = final.callPackage ./nix/testground-image.nix { };
+        })
+      ];
     };
 }

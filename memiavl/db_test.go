@@ -3,6 +3,7 @@ package memiavl
 import (
 	"encoding/hex"
 	"errors"
+	fmt "fmt"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -10,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cosmos/iavl"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +42,12 @@ func TestRewriteSnapshot(t *testing.T) {
 
 func TestRemoveSnapshotDir(t *testing.T) {
 	dbDir := t.TempDir()
-	defer os.RemoveAll(dbDir)
+	defer func(path string) {
+		err := os.RemoveAll(path)
+		if err != nil {
+			require.NoError(t, err)
+		}
+	}(dbDir)
 
 	snapshotDir := filepath.Join(dbDir, snapshotName(0))
 	tmpDir := snapshotDir + TmpSuffix
@@ -165,7 +170,7 @@ func mockNameChangeSet(name, key, value string) []*NamedChangeSet {
 	return []*NamedChangeSet{
 		{
 			Name: name,
-			Changeset: iavl.ChangeSet{
+			Changeset: ChangeSet{
 				Pairs: mockKVPairs(key, value),
 			},
 		},
@@ -181,74 +186,68 @@ func TestInitialVersion(t *testing.T) {
 	name2 := "new2"
 	key := "hello"
 	value := "world"
+	value1 := "world1"
 	for _, initialVersion := range []int64{0, 1, 100} {
 		dir := t.TempDir()
 		db, err := Load(dir, Options{CreateIfMissing: true, InitialStores: []string{name}})
 		require.NoError(t, err)
-		db.SetInitialVersion(initialVersion)
+		err = db.SetInitialVersion(initialVersion)
+		require.NoError(t, err)
 		require.NoError(t, db.ApplyChangeSets(mockNameChangeSet(name, key, value)))
 		v, err := db.Commit()
 		require.NoError(t, err)
-		if initialVersion <= 1 {
-			require.Equal(t, int64(1), v)
-		} else {
-			require.Equal(t, initialVersion, v)
-		}
-		hash := db.LastCommitInfo().StoreInfos[0].CommitId.Hash
-		require.Equal(t, "6032661ab0d201132db7a8fa1da6a0afe427e6278bd122c301197680ab79ca02", hex.EncodeToString(hash))
-		require.NoError(t, db.ApplyChangeSets(mockNameChangeSet(name, key, "world1")))
+
+		realInitialVersion := max(initialVersion, 1)
+		require.Equal(t, realInitialVersion, v)
+
+		// the nodes are created with initial version to be compatible with iavl v1 behavior.
+		// with iavl v0, the nodes are created with version 1.
+		commitId := db.LastCommitInfo().StoreInfos[0].CommitId
+		require.Equal(t, commitId.Hash, HashNode(newLeafNode([]byte(key), []byte(value), uint32(commitId.Version))))
+
+		require.NoError(t, db.ApplyChangeSets(mockNameChangeSet(name, key, value1)))
 		v, err = db.Commit()
 		require.NoError(t, err)
-		hash = db.LastCommitInfo().StoreInfos[0].CommitId.Hash
-		if initialVersion <= 1 {
-			require.Equal(t, int64(2), v)
-			require.Equal(t, "ef0530f9bf1af56c19a3bac32a3ec4f76a6fefaacb2efd4027a2cf37240f60bb", hex.EncodeToString(hash))
-		} else {
-			require.Equal(t, initialVersion+1, v)
-			require.Equal(t, "a719e7d699d42ea8e5637ec84675a2c28f14a00a71fb518f20aa2c395673a3b8", hex.EncodeToString(hash))
-		}
+		commitId = db.LastCommitInfo().StoreInfos[0].CommitId
+		require.Equal(t, realInitialVersion+1, v)
+		require.Equal(t, commitId.Hash, HashNode(newLeafNode([]byte(key), []byte(value1), uint32(commitId.Version))))
 		require.NoError(t, db.Close())
 
+		// reload the db, check the contents are the same
 		db, err = Load(dir, Options{})
 		require.NoError(t, err)
 		require.Equal(t, uint32(initialVersion), db.initialVersion)
 		require.Equal(t, v, db.Version())
-		require.Equal(t, hex.EncodeToString(hash), hex.EncodeToString(db.LastCommitInfo().StoreInfos[0].CommitId.Hash))
+		require.Equal(t, hex.EncodeToString(commitId.Hash), hex.EncodeToString(db.LastCommitInfo().StoreInfos[0].CommitId.Hash))
 
-		db.ApplyUpgrades([]*TreeNameUpgrade{{Name: name1}})
+		// add a new store to a reloaded db
+		err = db.ApplyUpgrades([]*TreeNameUpgrade{{Name: name1}})
+		require.NoError(t, err)
 		require.NoError(t, db.ApplyChangeSets(mockNameChangeSet(name1, key, value)))
 		v, err = db.Commit()
 		require.NoError(t, err)
-		if initialVersion <= 1 {
-			require.Equal(t, int64(3), v)
-		} else {
-			require.Equal(t, initialVersion+2, v)
-		}
+		require.Equal(t, realInitialVersion+2, v)
 		require.Equal(t, 2, len(db.lastCommitInfo.StoreInfos))
 		info := db.lastCommitInfo.StoreInfos[0]
 		require.Equal(t, name1, info.Name)
 		require.Equal(t, v, info.CommitId.Version)
-		require.Equal(t, "6032661ab0d201132db7a8fa1da6a0afe427e6278bd122c301197680ab79ca02", hex.EncodeToString(info.CommitId.Hash))
-		// the nodes are created with version 1, which is compatible with iavl behavior: https://github.com/cosmos/iavl/pull/660
-		require.Equal(t, info.CommitId.Hash, HashNode(newLeafNode([]byte(key), []byte(value), 1)))
+		require.Equal(t, info.CommitId.Hash, HashNode(newLeafNode([]byte(key), []byte(value), uint32(info.CommitId.Version))))
 
+		// test snapshot rewriting and reload
 		require.NoError(t, db.RewriteSnapshot())
 		require.NoError(t, db.Reload())
-
-		db.ApplyUpgrades([]*TreeNameUpgrade{{Name: name2}})
+		// add new store after snapshot rewriting
+		err = db.ApplyUpgrades([]*TreeNameUpgrade{{Name: name2}})
+		require.NoError(t, err)
 		require.NoError(t, db.ApplyChangeSets(mockNameChangeSet(name2, key, value)))
 		v, err = db.Commit()
 		require.NoError(t, err)
-		if initialVersion <= 1 {
-			require.Equal(t, int64(4), v)
-		} else {
-			require.Equal(t, initialVersion+3, v)
-		}
+		require.Equal(t, realInitialVersion+3, v)
 		require.Equal(t, 3, len(db.lastCommitInfo.StoreInfos))
 		info2 := db.lastCommitInfo.StoreInfos[1]
 		require.Equal(t, name2, info2.Name)
 		require.Equal(t, v, info2.CommitId.Version)
-		require.Equal(t, hex.EncodeToString(info.CommitId.Hash), hex.EncodeToString(info2.CommitId.Hash))
+		require.Equal(t, info2.CommitId.Hash, HashNode(newLeafNode([]byte(key), []byte(value), uint32(info2.CommitId.Version))))
 	}
 }
 
@@ -362,8 +361,8 @@ func TestEmptyValue(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, db.ApplyChangeSets([]*NamedChangeSet{
-		{Name: "test", Changeset: iavl.ChangeSet{
-			Pairs: []*iavl.KVPair{
+		{Name: "test", Changeset: ChangeSet{
+			Pairs: []*KVPair{
 				{Key: []byte("hello1"), Value: []byte("")},
 				{Key: []byte("hello2"), Value: []byte("")},
 				{Key: []byte("hello3"), Value: []byte("")},
@@ -374,8 +373,8 @@ func TestEmptyValue(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, db.ApplyChangeSets([]*NamedChangeSet{
-		{Name: "test", Changeset: iavl.ChangeSet{
-			Pairs: []*iavl.KVPair{{Key: []byte("hello1"), Delete: true}},
+		{Name: "test", Changeset: ChangeSet{
+			Pairs: []*KVPair{{Key: []byte("hello1"), Delete: true}},
 		}},
 	}))
 	version, err := db.Commit()
@@ -432,8 +431,8 @@ func TestFastCommit(t *testing.T) {
 	db, err := Load(dir, Options{CreateIfMissing: true, InitialStores: []string{"test"}, SnapshotInterval: 3, AsyncCommitBuffer: 10})
 	require.NoError(t, err)
 
-	cs := iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	cs := ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello1"), Value: make([]byte, 1024*1024)},
 		},
 	}
@@ -455,13 +454,13 @@ func TestRepeatedApplyChangeSet(t *testing.T) {
 	require.NoError(t, err)
 
 	err = db.ApplyChangeSets([]*NamedChangeSet{
-		{Name: "test1", Changeset: iavl.ChangeSet{
-			Pairs: []*iavl.KVPair{
+		{Name: "test1", Changeset: ChangeSet{
+			Pairs: []*KVPair{
 				{Key: []byte("hello1"), Value: []byte("world1")},
 			},
 		}},
-		{Name: "test2", Changeset: iavl.ChangeSet{
-			Pairs: []*iavl.KVPair{
+		{Name: "test2", Changeset: ChangeSet{
+			Pairs: []*KVPair{
 				{Key: []byte("hello2"), Value: []byte("world2")},
 			},
 		}},
@@ -469,40 +468,112 @@ func TestRepeatedApplyChangeSet(t *testing.T) {
 	require.NoError(t, err)
 
 	err = db.ApplyChangeSets([]*NamedChangeSet{{Name: "test1"}})
-	require.Error(t, err)
-	err = db.ApplyChangeSet("test1", iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	require.NoError(t, err)
+
+	err = db.ApplyChangeSet("test1", ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello2"), Value: []byte("world2")},
 		},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	_, err = db.Commit()
 	require.NoError(t, err)
 
-	err = db.ApplyChangeSet("test1", iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	err = db.ApplyChangeSet("test1", ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello2"), Value: []byte("world2")},
 		},
 	})
 	require.NoError(t, err)
-	err = db.ApplyChangeSet("test2", iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	err = db.ApplyChangeSet("test2", ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello2"), Value: []byte("world2")},
 		},
 	})
 	require.NoError(t, err)
 
-	err = db.ApplyChangeSet("test1", iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	err = db.ApplyChangeSet("test1", ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello2"), Value: []byte("world2")},
 		},
 	})
-	require.Error(t, err)
-	err = db.ApplyChangeSet("test2", iavl.ChangeSet{
-		Pairs: []*iavl.KVPair{
+	require.NoError(t, err)
+	err = db.ApplyChangeSet("test2", ChangeSet{
+		Pairs: []*KVPair{
 			{Key: []byte("hello2"), Value: []byte("world2")},
 		},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
+}
+
+func TestIdempotentWrite(t *testing.T) {
+	for _, asyncCommit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("asyncCommit=%v", asyncCommit), func(t *testing.T) {
+			testIdempotentWrite(t, asyncCommit)
+		})
+	}
+}
+
+func testIdempotentWrite(t *testing.T, asyncCommit bool) {
+	t.Helper()
+	dir := t.TempDir()
+
+	asyncCommitBuffer := -1
+	if asyncCommit {
+		asyncCommitBuffer = 10
+	}
+
+	db, err := Load(dir, Options{
+		CreateIfMissing:   true,
+		InitialStores:     []string{"test1", "test2"},
+		AsyncCommitBuffer: asyncCommitBuffer,
+	})
+	require.NoError(t, err)
+
+	// generate some data into db
+	var changes [][]*NamedChangeSet
+	for i := 0; i < 10; i++ {
+		cs := []*NamedChangeSet{
+			{
+				Name:      "test1",
+				Changeset: ChangeSet{Pairs: mockKVPairs("hello", fmt.Sprintf("world%d", i))},
+			},
+			{
+				Name:      "test2",
+				Changeset: ChangeSet{Pairs: mockKVPairs("hello", fmt.Sprintf("world%d", i))},
+			},
+		}
+		changes = append(changes, cs)
+	}
+
+	for _, cs := range changes {
+		require.NoError(t, db.ApplyChangeSets(cs))
+		_, err := db.Commit()
+		require.NoError(t, err)
+	}
+
+	commitInfo := *db.LastCommitInfo()
+	require.NoError(t, db.Close())
+
+	// reload db from disk at an intermediate version
+	db, err = Load(dir, Options{TargetVersion: 5})
+	require.NoError(t, err)
+
+	// replay some random writes to reach same version
+	for i := 0; i < 5; i++ {
+		require.NoError(t, db.ApplyChangeSets(changes[i+5]))
+		_, err := db.Commit()
+		require.NoError(t, err)
+	}
+
+	// it should reach same result
+	require.Equal(t, commitInfo, *db.LastCommitInfo())
+
+	require.NoError(t, db.Close())
+
+	// reload db again, it should reach same result
+	db, err = Load(dir, Options{})
+	require.NoError(t, err)
+	require.Equal(t, commitInfo, *db.LastCommitInfo())
 }
