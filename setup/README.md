@@ -33,7 +33,9 @@ sh setup/upgrade.sh
 >
 
 This version of the script takes care of the following:
-- Applies the config changes as detailed in https://github.com/crypto-org-chain/cronos/releases/tag/v1.1.0 (v1.0.0 => v1.1.1 for genesis).
+- Applies the config changes as detailed in https://github.com/crypto-org-chain/cronos/releases/tag/v1.4.0,
+- https://github.com/crypto-org-chain/cronos/releases/tag/v1.5.0, and
+- https://github.com/crypto-org-chain/cronos/releases/tag/v1.6.1.
 
 ### Usage
 
@@ -68,7 +70,7 @@ UPGRADE_NAME=v1.1.1 \
 UPGRADE_REF=v1.1.1 \
 UPGRADE_HEIGHT=13000000 \
 EXPECTED_COMMIT=bab909493ad4f56828b5ee30c21c97219fbb93c1 \
-sh setup/staged-upgrade.sh
+bash setup/staged-upgrade.sh
 ```
 
 > The script does **not** replace the running binary before the upgrade height.

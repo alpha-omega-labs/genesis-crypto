@@ -14,7 +14,7 @@ cat <<"EOF"
 EOF
 
 echo ""
-echo "This script should only be used if your node halted (!) and you have to perform the v1.1.1 upgrade!"
+echo "This script should only be used if your node halted (!) and you have to perform a software upgrade!"
 echo ""
 read -p "Do you want to continue? (y/N): " ANSWER
 
@@ -40,8 +40,7 @@ cd $REPO_ROOT
 # System update and installation of dependencies
 . ./setup/dependencies.sh
 
-# Migrate configs from v1.1.1 to v1.6.2 (see: https://github.com/crypto-org-chain/cronos/releases/tag/v1.4.0,
-# https://github.com/crypto-org-chain/cronos/releases/tag/v1.5.0 and https://github.com/crypto-org-chain/cronos/releases/tag/v1.6.1)
+# Migrate configs
 sh ./setup/migrate-configs.sh "$CONFIG_DIR/config.toml" "$CONFIG_DIR/app.toml"
 
 # Install binaries
