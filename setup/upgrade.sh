@@ -13,8 +13,15 @@ cat <<"EOF"
                                                                                              
 EOF
 
+# Root of the current repository
+REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
+
+# Source the variables file
+. "$REPO_ROOT/utils/_variables.sh"
+
 echo ""
 echo "This script should only be used if your node halted (!) and you have to perform a software upgrade!"
+echo "NOTE: a backup of all your important files in $NODE_DIR/ will be created in $NODE_DIR-backup/."
 echo ""
 read -p "Do you want to continue? (y/N): " ANSWER
 
@@ -25,12 +32,6 @@ if [ "$ANSWER" != "y" ]; then
     exit 1
 fi
 
-# Root of the current repository
-REPO_ROOT=$(cd "$(dirname "$0")"/.. && pwd)
-
-# Source the variables file
-. "$REPO_ROOT/utils/_variables.sh"
-
 # Stop services
 systemctl stop $BINARY_NAME
 
@@ -39,6 +40,9 @@ cd $REPO_ROOT
 
 # System update and installation of dependencies
 . ./setup/dependencies.sh
+
+# Backup important files in the node directory
+rsync -av --include='data/priv_validator_state.json' --exclude='data/*' "$NODE_DIR/" "$NODE_DIR-backup/"
 
 # Migrate configs
 sh ./setup/migrate-configs.sh "$CONFIG_DIR/config.toml" "$CONFIG_DIR/app.toml"

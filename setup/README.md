@@ -14,6 +14,7 @@ This version of the script takes care of the following to upgrade your node:
 
 - It stops the node (the service)
 - Installs or upgrades all the necessary dependencies
+- Creates a backup of important files in your current node directory (as _.genesis-backup_)
 - Creates a backup of existing _config.toml_ or _app.toml_ files (as _.toml.bak_)
 - Calls [migrate-configs.sh](/setup/migrate-configs.sh) to migrate your app.toml and config.toml files
 - Builds the binaries
