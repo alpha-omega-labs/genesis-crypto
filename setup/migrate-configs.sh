@@ -149,8 +149,8 @@ set_toml_key "$APP_TOML" "telemetry" "statsd-addr" "\"\"" ensure
 # add telemetry.datadog-hostname = ""
 set_toml_key "$APP_TOML" "telemetry" "datadog-hostname" "\"\"" ensure
 
-# add evm.block-executor = "block-stm"
-set_toml_key "$APP_TOML" "evm" "block-executor" "\"block-stm\"" ensure
+# add evm.block-executor = "sequential"
+set_toml_key "$APP_TOML" "evm" "block-executor" "\"sequential\"" ensure
 
 # add evm.block-stm-workers = 0
 set_toml_key "$APP_TOML" "evm" "block-stm-workers" "0" ensure
