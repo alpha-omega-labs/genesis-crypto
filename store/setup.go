@@ -3,15 +3,15 @@ package store
 import (
 	"path/filepath"
 
-	"github.com/cometbft/cometbft/libs/log"
+	"github.com/crypto-org-chain/cronos/memiavl"
+	"github.com/crypto-org-chain/cronos/store/rootmulti"
 	"github.com/spf13/cast"
+
+	"cosmossdk.io/log"
 
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
-
-	"github.com/crypto-org-chain/cronos/memiavl"
-	"github.com/crypto-org-chain/cronos/store/rootmulti"
 )
 
 const (
@@ -26,14 +26,22 @@ const (
 
 // SetupMemIAVL insert the memiavl setter in front of baseapp options, so that
 // the default rootmulti store is replaced by memiavl store,
-func SetupMemIAVL(logger log.Logger, homePath string, appOpts servertypes.AppOptions, sdk46Compact bool, supportExportNonSnapshotVersion bool, baseAppOptions []func(*baseapp.BaseApp)) []func(*baseapp.BaseApp) {
+func SetupMemIAVL(
+	logger log.Logger,
+	homePath string,
+	appOpts servertypes.AppOptions,
+	sdk46Compact bool,
+	supportExportNonSnapshotVersion bool,
+	cacheSize int,
+	baseAppOptions []func(*baseapp.BaseApp),
+) []func(*baseapp.BaseApp) {
 	if cast.ToBool(appOpts.Get(FlagMemIAVL)) {
 		opts := memiavl.Options{
 			AsyncCommitBuffer:   cast.ToInt(appOpts.Get(FlagAsyncCommitBuffer)),
 			ZeroCopy:            cast.ToBool(appOpts.Get(FlagZeroCopy)),
 			SnapshotKeepRecent:  cast.ToUint32(appOpts.Get(FlagSnapshotKeepRecent)),
 			SnapshotInterval:    cast.ToUint32(appOpts.Get(FlagSnapshotInterval)),
-			CacheSize:           cast.ToInt(appOpts.Get(FlagCacheSize)),
+			CacheSize:           cacheSize,
 			SnapshotWriterLimit: cast.ToInt(appOpts.Get(FlagSnapshotWriterLimit)),
 		}
 
@@ -50,7 +58,7 @@ func SetupMemIAVL(logger log.Logger, homePath string, appOpts servertypes.AppOpt
 	return baseAppOptions
 }
 
-func setMemIAVL(homePath string, logger log.Logger, opts memiavl.Options, sdk46Compact bool, supportExportNonSnapshotVersion bool) func(*baseapp.BaseApp) {
+func setMemIAVL(homePath string, logger log.Logger, opts memiavl.Options, sdk46Compact, supportExportNonSnapshotVersion bool) func(*baseapp.BaseApp) {
 	return func(bapp *baseapp.BaseApp) {
 		// trigger state-sync snapshot creation by memiavl
 		opts.TriggerStateSyncExport = func(height int64) {

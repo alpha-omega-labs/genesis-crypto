@@ -1,20 +1,19 @@
 package types
 
 import (
+	"bytes"
+	stderrors "errors"
+
+	"filippo.io/age"
+	"github.com/ethereum/go-ethereum/common"
+
 	"cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
-	"github.com/ethereum/go-ethereum/common"
 )
 
-const (
-	TypeMsgConvertVouchers    = "ConvertVouchers"
-	TypeMsgTransferTokens     = "TransferTokens"
-	TypeMsgUpdateTokenMapping = "UpdateTokenMapping"
-	TypeMsgUpdateParams       = "UpdateParams"
-	TypeMsgTurnBridge         = "TurnBridge"
-	TypeMsgUpdatePermissions  = "UpdatePermissions"
-)
+const TypeMsgUpdateTokenMapping = "UpdateTokenMapping"
 
 var (
 	_ sdk.Msg = &MsgConvertVouchers{}
@@ -23,6 +22,7 @@ var (
 	_ sdk.Msg = &MsgUpdateParams{}
 	_ sdk.Msg = &MsgTurnBridge{}
 	_ sdk.Msg = &MsgUpdatePermissions{}
+	_ sdk.Msg = &MsgStoreBlockList{}
 )
 
 func NewMsgConvertVouchers(address string, coins sdk.Coins) *MsgConvertVouchers {
@@ -30,31 +30,6 @@ func NewMsgConvertVouchers(address string, coins sdk.Coins) *MsgConvertVouchers 
 		Address: address,
 		Coins:   coins,
 	}
-}
-
-// Route ...
-func (msg MsgConvertVouchers) Route() string {
-	return RouterKey
-}
-
-// Type ...
-func (msg MsgConvertVouchers) Type() string {
-	return TypeMsgConvertVouchers
-}
-
-// GetSigners ...
-func (msg *MsgConvertVouchers) GetSigners() []sdk.AccAddress {
-	address, err := sdk.AccAddressFromBech32(msg.Address)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{address}
-}
-
-// GetSignBytes ...
-func (msg *MsgConvertVouchers) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic ...
@@ -75,37 +50,12 @@ func (msg *MsgConvertVouchers) ValidateBasic() error {
 
 var _ sdk.Msg = &MsgTransferTokens{}
 
-func NewMsgTransferTokens(from string, to string, coins sdk.Coins) *MsgTransferTokens {
+func NewMsgTransferTokens(from, to string, coins sdk.Coins) *MsgTransferTokens {
 	return &MsgTransferTokens{
 		From:  from,
 		To:    to,
 		Coins: coins,
 	}
-}
-
-// Route ...
-func (msg MsgTransferTokens) Route() string {
-	return RouterKey
-}
-
-// Type ...
-func (msg MsgTransferTokens) Type() string {
-	return TypeMsgTransferTokens
-}
-
-// GetSigners ...
-func (msg *MsgTransferTokens) GetSigners() []sdk.AccAddress {
-	from, err := sdk.AccAddressFromBech32(msg.From)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{from}
-}
-
-// GetSignBytes ...
-func (msg *MsgTransferTokens) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
 }
 
 // ValidateBasic ...
@@ -130,7 +80,7 @@ func (msg *MsgTransferTokens) ValidateBasic() error {
 var _ sdk.Msg = &MsgUpdateTokenMapping{}
 
 // NewMsgUpdateTokenMapping ...
-func NewMsgUpdateTokenMapping(admin string, denom string, contract string, symbol string, decimal uint32) *MsgUpdateTokenMapping {
+func NewMsgUpdateTokenMapping(admin, denom, contract, symbol string, decimal uint32) *MsgUpdateTokenMapping {
 	return &MsgUpdateTokenMapping{
 		Sender:   admin,
 		Denom:    denom,
@@ -167,20 +117,9 @@ func (msg *MsgUpdateTokenMapping) ValidateBasic() error {
 	return nil
 }
 
-// Route ...
-func (msg MsgUpdateTokenMapping) Route() string {
-	return RouterKey
-}
-
 // Type ...
 func (msg MsgUpdateTokenMapping) Type() string {
 	return TypeMsgUpdateTokenMapping
-}
-
-// GetSignBytes ...
-func (msg *MsgUpdateTokenMapping) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
 }
 
 // NewMsgTurnBridge ...
@@ -189,15 +128,6 @@ func NewMsgTurnBridge(admin string, enable bool) *MsgTurnBridge {
 		Sender: admin,
 		Enable: enable,
 	}
-}
-
-// GetSigners ...
-func (msg *MsgTurnBridge) GetSigners() []sdk.AccAddress {
-	sender, err := sdk.AccAddressFromBech32(msg.Sender)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{sender}
 }
 
 // ValidateBasic ...
@@ -210,36 +140,11 @@ func (msg *MsgTurnBridge) ValidateBasic() error {
 	return nil
 }
 
-// Route ...
-func (msg MsgTurnBridge) Route() string {
-	return RouterKey
-}
-
-// Type ...
-func (msg MsgTurnBridge) Type() string {
-	return TypeMsgTurnBridge
-}
-
-// GetSignBytes ...
-func (msg *MsgTurnBridge) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
-}
-
 func NewMsgUpdateParams(authority string, params Params) *MsgUpdateParams {
 	return &MsgUpdateParams{
 		Authority: authority,
 		Params:    params,
 	}
-}
-
-// GetSigners returns the expected signers for a MsgUpdateParams message.
-func (msg *MsgUpdateParams) GetSigners() []sdk.AccAddress {
-	addr, err := sdk.AccAddressFromBech32(msg.Authority)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{addr}
 }
 
 // ValidateBasic does a sanity check on the provided data.
@@ -255,38 +160,13 @@ func (msg *MsgUpdateParams) ValidateBasic() error {
 	return nil
 }
 
-// Route ...
-func (msg MsgUpdateParams) Route() string {
-	return RouterKey
-}
-
-// Type ...
-func (msg MsgUpdateParams) Type() string {
-	return TypeMsgUpdateParams
-}
-
-// GetSignBytes ...
-func (msg *MsgUpdateParams) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
-}
-
 // NewMsgUpdatePermissions ...
-func NewMsgUpdatePermissions(from string, address string, permissions uint64) *MsgUpdatePermissions {
+func NewMsgUpdatePermissions(from, address string, permissions uint64) *MsgUpdatePermissions {
 	return &MsgUpdatePermissions{
 		From:        from,
 		Address:     address,
 		Permissions: permissions,
 	}
-}
-
-// GetSigners ...
-func (msg *MsgUpdatePermissions) GetSigners() []sdk.AccAddress {
-	sender, err := sdk.AccAddressFromBech32(msg.From)
-	if err != nil {
-		panic(err)
-	}
-	return []sdk.AccAddress{sender}
 }
 
 // ValidateBasic ...
@@ -303,18 +183,30 @@ func (msg *MsgUpdatePermissions) ValidateBasic() error {
 	return nil
 }
 
-// Route ...
-func (msg MsgUpdatePermissions) Route() string {
-	return RouterKey
+func NewMsgStoreBlockList(from string, blob []byte) *MsgStoreBlockList {
+	return &MsgStoreBlockList{
+		From: from,
+		Blob: blob,
+	}
 }
 
-// Type ...
-func (msg MsgUpdatePermissions) Type() string {
-	return TypeMsgUpdatePermissions
+var errDummyIdentity = stderrors.New("dummy")
+
+type dummyIdentity struct{}
+
+func (i *dummyIdentity) Unwrap(stanzas []*age.Stanza) ([]byte, error) {
+	return nil, errDummyIdentity
 }
 
-// GetSignBytes ...
-func (msg *MsgUpdatePermissions) GetSignBytes() []byte {
-	bz := ModuleCdc.MustMarshalJSON(msg)
-	return sdk.MustSortJSON(bz)
+func (msg *MsgStoreBlockList) ValidateBasic() error {
+	_, err := sdk.AccAddressFromBech32(msg.From)
+	if err != nil {
+		return errors.Wrapf(sdkerrors.ErrInvalidAddress, "invalid sender address (%s)", err)
+	}
+	// skip heavy operation in Decrypt by early return with errDummyIdentity in
+	_, err = age.Decrypt(bytes.NewBuffer(msg.Blob), new(dummyIdentity))
+	if err != nil && !stderrors.Is(err, errDummyIdentity) {
+		return err
+	}
+	return nil
 }

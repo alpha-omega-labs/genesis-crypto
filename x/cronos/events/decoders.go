@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/cosmos/cosmos-sdk/types/bech32"
-	transfertypes "github.com/cosmos/ibc-go/v7/modules/apps/transfer/types"
-	"github.com/ethereum/go-ethereum/common"
-
+	transfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
 	"github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/lib"
 	generated "github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/precompile/relayer"
+	"github.com/ethereum/go-ethereum/common"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/bech32"
 )
 
 type (
@@ -34,7 +34,7 @@ func (d ValueDecoders) GetDecoder(name string) (ValueDecoder, bool) {
 const (
 	// intBase is the base `int`s are parsed in, 10.
 	intBase = 10
-	// int64Bits is the number of bits stored in a variabe of `int64` type.
+	// int64Bits is the number of bits stored in a variable of `int64` type.
 	int64Bits = 64
 )
 
@@ -62,7 +62,7 @@ func ConvertAccAddressFromBech32(attributeValue string, _ bool) ([]any, error) {
 	return []any{attributeValue}, nil
 }
 
-func ConvertAmount(attributeValue string, indexed bool) ([]any, error) {
+func ConvertAmount(attributeValue string, _ bool) ([]any, error) {
 	coins, err := sdk.ParseCoinsNormalized(attributeValue)
 	if err == nil {
 		return []any{sdkCoinsToEvmCoins(coins)}, nil
@@ -83,6 +83,45 @@ func sdkCoinsToEvmCoins(sdkCoins sdk.Coins) []lib.CosmosCoin {
 		}
 	}
 	return evmCoins
+}
+
+func ConvertTokens(attributeValue string, _ bool) ([]any, error) {
+	var tokens []transfertypes.Token
+	err := json.Unmarshal([]byte(attributeValue), &tokens)
+	if err != nil {
+		return []any{}, err
+	}
+	evmTokens, err := sdkTokensToEvmTokens(tokens)
+	if err != nil {
+		return []any{}, err
+	}
+	return []any{evmTokens}, nil
+}
+
+func sdkTokensToEvmTokens(tokens []transfertypes.Token) ([]lib.CosmosToken, error) {
+	evmTokens := make([]lib.CosmosToken, len(tokens))
+	for i, token := range tokens {
+		amt, ok := new(big.Int).SetString(token.Amount, intBase)
+		if !ok {
+			return nil, errors.New("invalid amount")
+		}
+		traces := token.Denom.GetTrace()
+		hops := make([]lib.CosmosHop, len(traces))
+		for j, trace := range traces {
+			hops[j] = lib.CosmosHop{
+				PortId:    trace.PortId,
+				ChannelId: trace.ChannelId,
+			}
+		}
+		evmTokens[i] = lib.CosmosToken{
+			Amount: amt,
+			Denom: lib.CosmosDenom{
+				Base:  token.Denom.GetBase(),
+				Trace: hops,
+			},
+		}
+	}
+	return evmTokens, nil
 }
 
 func ConvertPacketData(attributeValue string, indexed bool) ([]any, error) {

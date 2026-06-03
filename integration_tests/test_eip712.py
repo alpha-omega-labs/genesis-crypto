@@ -3,12 +3,12 @@ import json
 
 import requests
 from eth_account import Account
-from eth_account.messages import encode_structured_data
 from pystarport import ports
 
 from .eip712_utils import (
     create_message_send,
     create_tx_raw_eip712,
+    encode_structured_data_legacy,
     signature_to_web3_extension,
 )
 from .utils import ADDRS, KEYS
@@ -31,7 +31,7 @@ def test_native_tx(cronos):
     sender = {
         "accountAddress": src_addr,
         "sequence": w3.eth.get_transaction_count(ADDRS[src]),
-        "accountNumber": int(src_account["base_account"]["account_number"]),
+        "accountNumber": int(src_account["account"]["value"]["account_number"]),
         "pubkey": json.loads(cli.address(src, "acc", "pubkey"))["key"],
     }
     denom = "basetcro"
@@ -50,7 +50,7 @@ def test_native_tx(cronos):
         "denom": denom,
     }
     tx = create_message_send(chain, sender, fee, "", params)
-    structured_msg = encode_structured_data(tx["eipToSign"])
+    structured_msg = encode_structured_data_legacy(tx["eipToSign"])
     signed = Account.sign_message(structured_msg, KEYS[src])
     extension = signature_to_web3_extension(
         chain,

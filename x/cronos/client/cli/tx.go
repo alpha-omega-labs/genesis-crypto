@@ -3,30 +3,28 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 
+	icagenesistypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/genesis/types"
+	icatypes "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/types"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	"github.com/ethereum/go-ethereum/common"
+	evmtypes "github.com/evmos/ethermint/x/evm/types"
+	feemarkettypes "github.com/evmos/ethermint/x/feemarket/types"
+	"github.com/spf13/cobra"
+
+	"github.com/cosmos/cosmos-sdk/client"
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/client/tx"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/version"
-	govcli "github.com/cosmos/cosmos-sdk/x/gov/client/cli"
-	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
-	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/spf13/cobra"
-
-	"github.com/cosmos/cosmos-sdk/client"
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
-	icagenesistypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/genesis/types"
-	icatypes "github.com/cosmos/ibc-go/v7/modules/apps/27-interchain-accounts/types"
-	ibcfeetypes "github.com/cosmos/ibc-go/v7/modules/apps/29-fee/types"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
-	icaauthtypes "github.com/crypto-org-chain/cronos/v2/x/icaauth/types"
-	evmtypes "github.com/evmos/ethermint/x/evm/types"
-	feemarkettypes "github.com/evmos/ethermint/x/feemarket/types"
-	gravitytypes "github.com/peggyjv/gravity-bridge/module/v2/x/gravity/types"
+	govcli "github.com/cosmos/cosmos-sdk/x/gov/client/cli"
+	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types/v1beta1"
 )
 
 // GetTxCmd returns the transaction commands for this module
@@ -46,6 +44,7 @@ func GetTxCmd() *cobra.Command {
 	cmd.AddCommand(CmdUpdateTokenMapping())
 	cmd.AddCommand(CmdTurnBridge())
 	cmd.AddCommand(CmdUpdatePermissions())
+	cmd.AddCommand(CmdStoreBlockList())
 	cmd.AddCommand(MigrateGenesisCmd())
 	return cmd
 }
@@ -319,6 +318,43 @@ func CmdUpdatePermissions() *cobra.Command {
 	return cmd
 }
 
+// CmdStoreBlockList returns a CLI command handler for updating cronos permissions
+func CmdStoreBlockList() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "store-block-list [encrypted-block-list-file]",
+		Short: "Store encrypted block list",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientTxContext(cmd)
+			if err != nil {
+				return err
+			}
+
+			fp, err := os.Open(args[0])
+			if err != nil {
+				return err
+			}
+			defer fp.Close()
+
+			// Read the file
+			blob, err := io.ReadAll(fp)
+			if err != nil {
+				return err
+			}
+
+			msg := types.NewMsgStoreBlockList(clientCtx.GetFromAddress().String(), blob)
+			if err := msg.ValidateBasic(); err != nil {
+				return err
+			}
+
+			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), msg)
+		},
+	}
+
+	flags.AddTxFlagsToCmd(cmd)
+	return cmd
+}
+
 type ExportEvmGenesisState struct {
 	evmtypes.GenesisState
 	Params ExportEvmParams `json:"params"`
@@ -340,46 +376,34 @@ type ExportFeemarketParams struct {
 	EnableHeight int64 `json:"enable_height,string"`
 }
 
-func Migrate(appState genutiltypes.AppMap, clientCtx client.Context) genutiltypes.AppMap {
-	// Add feeibc with default genesis.
-	if appState[ibcfeetypes.ModuleName] == nil {
-		appState[ibcfeetypes.ModuleName] = clientCtx.Codec.MustMarshalJSON(ibcfeetypes.DefaultGenesisState())
-	}
-	// Add gravity with default genesis.
-	if appState[gravitytypes.ModuleName] == nil {
-		appState[gravitytypes.ModuleName] = clientCtx.Codec.MustMarshalJSON(gravitytypes.DefaultGenesisState())
-	}
+func Migrate(appState genutiltypes.AppMap, clientCtx client.Context) (genutiltypes.AppMap, error) {
 	// Add interchainaccounts with default genesis.
 	if appState[icatypes.ModuleName] == nil {
 		appState[icatypes.ModuleName] = clientCtx.Codec.MustMarshalJSON(icagenesistypes.DefaultGenesis())
 	}
-	// Add icaauth with default genesis.
-	if appState[icaauthtypes.ModuleName] == nil {
-		appState[icaauthtypes.ModuleName] = clientCtx.Codec.MustMarshalJSON(icaauthtypes.DefaultGenesis())
-	}
 	var evmState ExportEvmGenesisState
 	err := json.Unmarshal(appState[evmtypes.ModuleName], &evmState)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	data, err := json.Marshal(evmState)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	appState[evmtypes.ModuleName] = data
 
 	var feemarketState ExportFeemarketGenesisState
 	err = json.Unmarshal(appState[feemarkettypes.ModuleName], &feemarketState)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	feemarketState.GenesisState.BlockGas = feemarketState.BlockGas
 	data, err = json.Marshal(feemarketState)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	appState[feemarkettypes.ModuleName] = data
-	return appState
+	return appState, nil
 }
 
 const flagGenesisTime = "genesis-time"

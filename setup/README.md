@@ -14,6 +14,7 @@ This version of the script takes care of the following to upgrade your node:
 
 - It stops the node (the service)
 - Installs or upgrades all the necessary dependencies
+- Creates a backup of important files in your current node directory (as _.genesis-backup_)
 - Creates a backup of existing _config.toml_ or _app.toml_ files (as _.toml.bak_)
 - Calls [migrate-configs.sh](/setup/migrate-configs.sh) to migrate your app.toml and config.toml files
 - Builds the binaries
@@ -33,7 +34,9 @@ sh setup/upgrade.sh
 >
 
 This version of the script takes care of the following:
-- Applies the config changes as detailed in https://github.com/crypto-org-chain/cronos/releases/tag/v1.1.0 (v1.0.0 => v1.1.1 for genesis).
+- Applies the config changes as detailed in https://github.com/crypto-org-chain/cronos/releases/tag/v1.4.0,
+- https://github.com/crypto-org-chain/cronos/releases/tag/v1.5.0, and
+- https://github.com/crypto-org-chain/cronos/releases/tag/v1.6.1.
 
 ### Usage
 
@@ -68,7 +71,7 @@ UPGRADE_NAME=v1.1.1 \
 UPGRADE_REF=v1.1.1 \
 UPGRADE_HEIGHT=13000000 \
 EXPECTED_COMMIT=bab909493ad4f56828b5ee30c21c97219fbb93c1 \
-sh setup/staged-upgrade.sh
+bash setup/staged-upgrade.sh
 ```
 
 > The script does **not** replace the running binary before the upgrade height.

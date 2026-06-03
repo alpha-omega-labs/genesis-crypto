@@ -19,27 +19,29 @@ jobs:
     timeout-minutes: 240
     strategy:
       matrix:
-        tests: [unmarked, ibc, ibc_rly_evm, ibc_rly_gas, ibc_timeout, ibc_update_client, ica, gov, upgrade, slow, gas]
+        tests: [unmarked, ibc, ibc_rly_evm, ibc_rly_gas, ibc_timeout, ibc_update_client, ica, gov, upgrade, slow, gas, mint]
     env:
       TESTS_TO_RUN: ${{ matrix.tests }}
     steps:
+      - name: Create more disk space
+        run: sudo rm -rf /usr/share/dotnet && sudo rm -rf /opt/ghc && sudo rm -rf "/usr/local/share/boost" && sudo rm -rf "$AGENT_TOOLSDIRECTORY"
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
       - id: changed-files
-        uses: tj-actions/changed-files@v41
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c # v46.0.5
         with:
           files: |
             docs
             *.md
             **/*.md
-      - uses: cachix/install-nix-action@v23
+      - uses: cachix/install-nix-action@fc6e360bedc9ee72d75e701397f0bb30dce77568 # v31.5.2
         with:
           nix_path: nixpkgs=channel:nixos-22.11
           extra_nix_config: |
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
         if: steps.changed-files.outputs.only_changed == 'false'
-      - uses: cachix/cachix-action@v12
+      - uses: cachix/cachix-action@6a9a34cdd93d0ae4b4b59fd678660efb08109f2f # v12
         if: steps.changed-files.outputs.only_changed == 'false'
         with:
           name: cronos
@@ -53,7 +55,7 @@ jobs:
       - name: 'Tar debug files'
         if: failure()
         run: tar cfz debug_files.tar.gz -C "${TMPDIR-/tmp}/pytest-of-runner" .
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: debug-files
@@ -63,10 +65,10 @@ jobs:
         if: steps.changed-files.outputs.only_changed == 'false'
         run: |
           nix profile install ./nix#go_1_22
-          go tool covdata textfmt -i=integration_tests/coverage -o profile.txt
+          go tool covdata textfmt -i=coverage -o profile.txt
       - name: Upload coverage report
         if: steps.changed-files.outputs.only_changed == 'false'
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./profile.txt
@@ -84,19 +86,19 @@ jobs:
         with:
           fetch-depth: 0
       - id: changed-files
-        uses: tj-actions/changed-files@v41
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c # v46.0.5
         with:
           files: |
             docs
             *.md
             **/*.md
-      - uses: cachix/install-nix-action@v23
+      - uses: cachix/install-nix-action@fc6e360bedc9ee72d75e701397f0bb30dce77568 # v31.5.2
         with:
           nix_path: nixpkgs=channel:nixos-22.11
           extra_nix_config: |
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
         if: steps.changed-files.outputs.only_changed == 'false'
-      - uses: cachix/cachix-action@v12
+      - uses: cachix/cachix-action@6a9a34cdd93d0ae4b4b59fd678660efb08109f2f # v12
         if: steps.changed-files.outputs.only_changed == 'false'
         with:
           name: cronos
@@ -107,3 +109,25 @@ jobs:
       - name: 'instantiate integration test env'
         if: steps.changed-files.outputs.only_changed == 'false'
         run: nix-store -r $(nix-instantiate integration_tests/shell.nix)
+
+  testground-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@fc6e360bedc9ee72d75e701397f0bb30dce77568 # v31.5.2
+        with:
+          nix_path: nixpkgs=channel:nixos-22.11
+          extra_nix_config: |
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+      - uses: cachix/cachix-action@6a9a34cdd93d0ae4b4b59fd678660efb08109f2f # v12
+        with:
+          name: cronos
+          # github don't pass secrets for pull request from fork repos,
+          # in that case the push is disabled naturally.
+          signingKey: "${{ secrets.CACHIX_SIGNING_KEY }}"
+      - name: Run tests
+        run: |
+          cd testground/benchmark
+          nix develop -c pytest -vv -s

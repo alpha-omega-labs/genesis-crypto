@@ -14,12 +14,10 @@ import (
 	"github.com/alitto/pond"
 	"github.com/cosmos/gogoproto/jsonpb"
 	"github.com/cosmos/iavl"
+	"github.com/crypto-org-chain/cronos/memiavl"
 	"github.com/spf13/cobra"
 
-	storetypes "github.com/cosmos/cosmos-sdk/store/types"
-	capabilitytypes "github.com/cosmos/cosmos-sdk/x/capability/types"
-
-	"github.com/crypto-org-chain/cronos/memiavl"
+	storetypes "cosmossdk.io/store/types"
 )
 
 func VerifyChangeSetCmd(defaultStores []string) *cobra.Command {
@@ -75,10 +73,7 @@ func VerifyChangeSetCmd(defaultStores []string) *cobra.Command {
 				lastestVersion int64
 				storeInfosLock sync.Mutex
 			)
-			storeInfos := []storetypes.StoreInfo{
-				// https://github.com/cosmos/cosmos-sdk/issues/14916
-				{Name: capabilitytypes.MemStoreKey, CommitId: storetypes.CommitID{}},
-			}
+			storeInfos := []storetypes.StoreInfo{}
 
 			mtree := memiavl.NewEmptyMultiTree(0, 0)
 			if len(loadSnapshot) > 0 {
@@ -90,8 +85,6 @@ func VerifyChangeSetCmd(defaultStores []string) *cobra.Command {
 			}
 
 			for _, store := range stores {
-				// https://github.com/golang/go/wiki/CommonMistakes#using-goroutines-on-loop-iterator-variables
-				store := store
 				tree := mtree.TreeByName(store)
 				if tree == nil {
 					tree = memiavl.New(0)
@@ -161,7 +154,7 @@ func VerifyChangeSetCmd(defaultStores []string) *cobra.Command {
 			}
 
 			if save {
-				if err := os.WriteFile(verifiedFileName, buf.Bytes(), os.ModePerm); err != nil {
+				if err := os.WriteFile(verifiedFileName, buf.Bytes(), 0o600); err != nil {
 					return err
 				}
 				fmt.Printf("version %d verify result saved to %s\n", commitInfo.Version, verifiedFileName)
@@ -218,7 +211,7 @@ func verifyOneStore(tree *memiavl.Tree, store, changeSetDir, saveSnapshot string
 				}
 
 				// no need to update hashes for intermediate versions.
-				tree.ApplyChangeSet(*changeSet)
+				tree.ApplyChangeSet(convertChangeSet(changeSet))
 				_, v, err := tree.SaveVersion(false)
 				if err != nil {
 					return false, err
@@ -297,5 +290,19 @@ func convertCommitInfo(commitInfo *storetypes.CommitInfo) *memiavl.CommitInfo {
 	return &memiavl.CommitInfo{
 		Version:    commitInfo.Version,
 		StoreInfos: storeInfos,
+	}
+}
+
+func convertChangeSet(cs *iavl.ChangeSet) memiavl.ChangeSet {
+	pairs := make([]*memiavl.KVPair, len(cs.Pairs))
+	for i, pair := range cs.Pairs {
+		pairs[i] = &memiavl.KVPair{
+			Delete: pair.Delete,
+			Key:    pair.Key,
+			Value:  pair.Value,
+		}
+	}
+	return memiavl.ChangeSet{
+		Pairs: pairs,
 	}
 }

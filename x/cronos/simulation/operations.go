@@ -4,22 +4,23 @@ import (
 	"errors"
 	"math/rand"
 
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	"github.com/ethereum/go-ethereum/common"
+
 	errorsmod "cosmossdk.io/errors"
 	simappparams "cosmossdk.io/simapp/params"
+
 	"github.com/cosmos/cosmos-sdk/baseapp"
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
 	"github.com/cosmos/cosmos-sdk/x/simulation"
-	"github.com/ethereum/go-ethereum/common"
-
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 )
 
 const (
-	/* #nosec */
+	// OpWeightMsgUpdateTokenMapping /* #nosec */
 	OpWeightMsgUpdateTokenMapping = "op_weight_msg_update_token_mapping"
 )
 
@@ -34,7 +35,7 @@ func WeightedOperations(
 ) simulation.WeightedOperations {
 	var weightMsgUpdateTokenMapping int
 
-	appParams.GetOrGenerate(cdc, OpWeightMsgUpdateTokenMapping, &weightMsgUpdateTokenMapping, nil,
+	appParams.GetOrGenerate(OpWeightMsgUpdateTokenMapping, &weightMsgUpdateTokenMapping, nil,
 		func(_ *rand.Rand) {
 			weightMsgUpdateTokenMapping = WeightMsgUpdateTokenMapping
 		},
@@ -81,7 +82,6 @@ func SimulateUpdateTokenMapping(ak types.AccountKeeper, bk types.BankKeeper, k *
 			TxGen:           simappparams.MakeTestEncodingConfig().TxConfig,
 			Cdc:             nil,
 			Msg:             msg,
-			MsgType:         msg.Type(),
 			Context:         ctx,
 			SimAccount:      simAccount,
 			AccountKeeper:   ak,

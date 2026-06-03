@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  Cosmos SDK <b>v0.47.10</b>
+  Cosmos SDK <b>v0.53.0</b>
 </p>
 
 ---
@@ -109,7 +109,7 @@ setup the github repo.
 ```bash
 git clone https://github.com/GenesisL1/genesis-crypto.git
 cd genesis-crypto
-git checkout v1.1.1
+git checkout v1.6.2
 ```
 
 create a `.genesis` folder with your config in the meanwhile.
@@ -156,6 +156,7 @@ Upgrading your node happens in phases. Your node will auto-halt whenever it is a
 |-------------|----------------------------|------------------------|
 | plan_crypto | 7,400,000 (legacy node)    | v1.0.0                |
 | v1.1.1      | 13,000,000                 | v1.1.1                |
+| v1.6.2      | TBD                        | v1.6.2                |
 
 You're only required to use the upgrade.sh script every time an upgrade is needed, but make sure the following conditions match:
 - node auto-halted (!) at a specific plan/height

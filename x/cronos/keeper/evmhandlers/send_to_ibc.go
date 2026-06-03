@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"math/big"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
+	cronoskeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
-	cronoskeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	sdkmath "cosmossdk.io/math"
+
+	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
 var _ types.EvmLogHandler = SendToIbcHandler{}
@@ -100,7 +102,7 @@ func (h SendToIbcHandler) handle(
 
 	contractAddr := sdk.AccAddress(contract.Bytes())
 	sender := sdk.AccAddress(senderAddress.Bytes())
-	amount := sdk.NewIntFromBigInt(amountInt)
+	amount := sdkmath.NewIntFromBigInt(amountInt)
 	coins := sdk.NewCoins(sdk.NewCoin(denom, amount))
 
 	var err error

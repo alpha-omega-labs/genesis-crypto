@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"math/big"
 
-	errorsmod "cosmossdk.io/errors"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	evmkeeper "github.com/evmos/ethermint/x/evm/keeper"
+	evmtypes "github.com/evmos/ethermint/x/evm/types"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	errorsmod "cosmossdk.io/errors"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
-	"github.com/ethereum/go-ethereum/common"
-	evmkeeper "github.com/evmos/ethermint/x/evm/keeper"
-	evmtypes "github.com/evmos/ethermint/x/evm/types"
 )
 
 var _ types.QueryServer = Keeper{}
@@ -65,25 +67,20 @@ func (k Keeper) ReplayBlock(goCtx context.Context, req *types.ReplayBlockRequest
 	ethCfg := params.ChainConfig.EthereumConfig(chainID)
 
 	blockHeight := big.NewInt(req.BlockNumber)
-	homestead := ethCfg.IsHomestead(blockHeight)
-	istanbul := ethCfg.IsIstanbul(blockHeight)
-	shanghai := ethCfg.IsShanghai(uint64(req.BlockTime.Unix()))
+	blockTime := uint64(req.BlockTime.Unix())
+	rules := ethCfg.Rules(blockHeight, ethCfg.MergeNetsplitBlock != nil, blockTime)
+
 	evmDenom := params.EvmDenom
 	baseFee := k.evmKeeper.GetBaseFee(ctx, ethCfg)
 
 	// we assume the message executions are successful, they are filtered in json-rpc api
 	for _, msg := range req.Msgs {
 		// deduct fee
-		txData, err := evmtypes.UnpackTxData(msg.Data)
-		if err != nil {
-			return nil, err
-		}
-
 		// populate the `From` field
-		if _, err := msg.GetSenderLegacy(chainID); err != nil {
+		if _, err := msg.GetSenderLegacy(ethtypes.LatestSignerForChainID(chainID)); err != nil {
 			return nil, err
 		}
-		fees, err := evmkeeper.VerifyFee(txData, evmDenom, baseFee, homestead, istanbul, shanghai, ctx.IsCheckTx())
+		fees, err := evmkeeper.VerifyFee(msg, evmDenom, baseFee, rules, ctx.IsCheckTx())
 		if err != nil {
 			return nil, errorsmod.Wrapf(err, "failed to verify the fees")
 		}
@@ -101,7 +98,7 @@ func (k Keeper) ReplayBlock(goCtx context.Context, req *types.ReplayBlockRequest
 		}
 		k.accountKeeper.SetAccount(ctx, acc)
 
-		rsp, err := k.evmKeeper.EthereumTx(sdk.WrapSDKContext(ctx), msg)
+		rsp, err := k.evmKeeper.EthereumTx(ctx, msg)
 		if err != nil {
 			return nil, err
 		}
@@ -144,5 +141,13 @@ func (k Keeper) Permissions(goCtx context.Context, req *types.QueryPermissionsRe
 	return &types.QueryPermissionsResponse{
 		CanChangeTokenMapping: CanChangeTokenMapping == (permissions & CanChangeTokenMapping),
 		CanTurnBridge:         CanTurnBridge == (permissions & CanTurnBridge),
+	}, nil
+}
+
+func (k Keeper) BlockList(goCtx context.Context, req *types.QueryBlockListRequest) (*types.QueryBlockListResponse, error) {
+	ctx := sdk.UnwrapSDKContext(goCtx)
+	blob := ctx.KVStore(k.storeKey).Get(types.KeyPrefixBlockList)
+	return &types.QueryBlockListResponse{
+		Blob: blob,
 	}, nil
 }

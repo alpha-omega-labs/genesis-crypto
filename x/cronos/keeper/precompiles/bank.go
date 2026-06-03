@@ -4,19 +4,19 @@ import (
 	"errors"
 	"math/big"
 
-	storetypes "github.com/cosmos/cosmos-sdk/store/types"
-
-	sdkmath "cosmossdk.io/math"
-	"github.com/cosmos/cosmos-sdk/codec"
+	"github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/precompile/bank"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/evmos/ethermint/x/evm/types"
 
 	errorsmod "cosmossdk.io/errors"
+	sdkmath "cosmossdk.io/math"
+	storetypes "cosmossdk.io/store/types"
+
+	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	errortypes "github.com/cosmos/cosmos-sdk/types/errors"
-	"github.com/crypto-org-chain/cronos/v2/x/cronos/events/bindings/cosmos/precompile/bank"
-	"github.com/evmos/ethermint/x/evm/types"
 )
 
 const (
@@ -123,7 +123,7 @@ func (bc *BankContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool) (
 		if err := bc.checkBlockedAddr(addr); err != nil {
 			return nil, err
 		}
-		denom := EVMDenom(contract.CallerAddress)
+		denom := EVMDenom(contract.Caller())
 		amt := sdk.NewCoin(denom, sdkmath.NewIntFromBigInt(amount))
 		err = stateDB.ExecuteNativeAction(precompileAddr, nil, func(ctx sdk.Context) error {
 			if err := bc.bankKeeper.IsSendEnabledCoins(ctx, amt); err != nil {
@@ -158,7 +158,7 @@ func (bc *BankContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool) (
 		token := args[0].(common.Address)
 		addr := args[1].(common.Address)
 		// query from storage
-		balance := bc.bankKeeper.GetBalance(stateDB.CacheContext(), sdk.AccAddress(addr.Bytes()), EVMDenom(token)).Amount.BigInt()
+		balance := bc.bankKeeper.GetBalance(stateDB.Context(), sdk.AccAddress(addr.Bytes()), EVMDenom(token)).Amount.BigInt()
 		return method.Outputs.Pack(balance)
 	case TransferMethodName:
 		if readonly {
@@ -179,7 +179,7 @@ func (bc *BankContract) Run(evm *vm.EVM, contract *vm.Contract, readonly bool) (
 		if err := bc.checkBlockedAddr(to); err != nil {
 			return nil, err
 		}
-		denom := EVMDenom(contract.CallerAddress)
+		denom := EVMDenom(contract.Caller())
 		amt := sdk.NewCoin(denom, sdkmath.NewIntFromBigInt(amount))
 		err = stateDB.ExecuteNativeAction(precompileAddr, nil, func(ctx sdk.Context) error {
 			if err := bc.bankKeeper.IsSendEnabledCoins(ctx, amt); err != nil {

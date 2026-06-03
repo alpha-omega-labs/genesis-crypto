@@ -1,7 +1,7 @@
 package client
 
 import (
-	dbm "github.com/cometbft/cometbft-db"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/linxGnu/grocksdb"
 	"github.com/spf13/cobra"
 )
@@ -28,6 +28,7 @@ func ChangeSetGroupCmd(opts Options) *cobra.Command {
 		ChangeSetToVersionDBCmd(),
 		RestoreAppDBCmd(opts),
 		RestoreVersionDBCmd(),
+		FixDataCmd(opts.DefaultStores),
 	)
 	return cmd
 }

@@ -3,11 +3,9 @@ package memiavl
 import (
 	"bytes"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"math"
 
-	"github.com/cosmos/iavl"
 	"github.com/cosmos/iavl/cache"
 )
 
@@ -20,17 +18,15 @@ func NewCache(cacheSize int) cache.Cache {
 	return cache.New(cacheSize)
 }
 
-// verify change sets by replay them to rebuild iavl tree and verify the root hashes
+// Tree verify change sets by replay them to rebuild iavl tree and verify the root hashes
 type Tree struct {
-	version uint32
+	version, cowVersion uint32
 	// root node of empty tree is represented as `nil`
 	root     Node
 	snapshot *Snapshot
 
 	// simple lru cache provided by iavl library
 	cache cache.Cache
-
-	initialVersion, cowVersion uint32
 
 	// when true, the get and iterator methods could return a slice pointing to mmaped blob files.
 	zeroCopy bool
@@ -45,14 +41,13 @@ func (n *cacheNode) GetKey() []byte {
 }
 
 // NewEmptyTree creates an empty tree at an arbitrary version.
-func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
+func NewEmptyTree(version uint64, cacheSize int) *Tree {
 	if version >= math.MaxUint32 {
 		panic("version overflows uint32")
 	}
 
 	return &Tree{
-		version:        uint32(version),
-		initialVersion: initialVersion,
+		version: uint32(version),
 		// no need to copy if the tree is not backed by snapshot
 		zeroCopy: true,
 		cache:    NewCache(cacheSize),
@@ -61,13 +56,16 @@ func NewEmptyTree(version uint64, initialVersion uint32, cacheSize int) *Tree {
 
 // New creates an empty tree at genesis version
 func New(cacheSize int) *Tree {
-	return NewEmptyTree(0, 0, cacheSize)
+	return NewEmptyTree(0, cacheSize)
 }
 
-// New creates a empty tree with initial-version,
+// NewWithInitialVersion creates a empty tree with initial-version,
 // it happens when a new store created at the middle of the chain.
 func NewWithInitialVersion(initialVersion uint32, cacheSize int) *Tree {
-	return NewEmptyTree(0, initialVersion, cacheSize)
+	if initialVersion <= 1 {
+		return New(cacheSize)
+	}
+	return NewEmptyTree(uint64(initialVersion-1), cacheSize)
 }
 
 // NewFromSnapshot mmap the blob files and create the root node.
@@ -98,8 +96,22 @@ func (t *Tree) SetInitialVersion(initialVersion int64) error {
 	if initialVersion >= math.MaxUint32 {
 		return fmt.Errorf("version overflows uint32: %d", initialVersion)
 	}
-	t.initialVersion = uint32(initialVersion)
+
+	t.setInitialVersion(uint32(initialVersion))
 	return nil
+}
+
+func (t *Tree) setInitialVersion(initialVersion uint32) {
+	if t.version > 0 {
+		// initial version has no effect if the tree is already initialized
+		return
+	}
+
+	if initialVersion < 1 {
+		t.version = 0
+	} else {
+		t.version = initialVersion - 1
+	}
 }
 
 // Copy returns a snapshot of the tree which won't be modified by further modifications on the main tree,
@@ -116,7 +128,7 @@ func (t *Tree) Copy(cacheSize int) *Tree {
 }
 
 // ApplyChangeSet apply the change set of a whole version, and update hashes.
-func (t *Tree) ApplyChangeSet(changeSet iavl.ChangeSet) {
+func (t *Tree) ApplyChangeSet(changeSet ChangeSet) {
 	for _, pair := range changeSet.Pairs {
 		if pair.Delete {
 			t.remove(pair.Key)
@@ -146,8 +158,8 @@ func (t *Tree) remove(key []byte) {
 
 // SaveVersion increases the version number and optionally updates the hashes
 func (t *Tree) SaveVersion(updateHash bool) ([]byte, int64, error) {
-	if t.version >= uint32(math.MaxUint32) {
-		return nil, 0, errors.New("version overflows uint32")
+	if t.version == uint32(math.MaxUint32) {
+		return nil, 0, fmt.Errorf("version overflows uint32: %d", t.version)
 	}
 
 	var hash []byte
@@ -155,7 +167,7 @@ func (t *Tree) SaveVersion(updateHash bool) ([]byte, int64, error) {
 		hash = t.RootHash()
 	}
 
-	t.version = nextVersionU32(t.version, t.initialVersion)
+	t.version++
 	return hash, int64(t.version), nil
 }
 
@@ -284,13 +296,4 @@ func (t *Tree) Close() error {
 	}
 	t.root = nil
 	return err
-}
-
-// nextVersionU32 is compatible with existing golang iavl implementation.
-// see: https://github.com/cosmos/iavl/pull/660
-func nextVersionU32(v uint32, initialVersion uint32) uint32 {
-	if v == 0 && initialVersion > 1 {
-		return initialVersion
-	}
-	return v + 1
 }

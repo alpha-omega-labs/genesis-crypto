@@ -31,7 +31,7 @@ jobs:
     outputs:
       valid: ${{ steps.setValid.outputs.valid }}
     steps:
-      - uses: tspascoal/get-user-teams-membership@v1.0.2
+      - uses: tspascoal/get-user-teams-membership@f7435257091e582354c44b55b296edf65be35700 # v1.0.2
         id: checkMember
         if: github.event_name == 'issue_comment'
         with:
@@ -76,7 +76,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Github API Request
         id: request
-        uses: octokit/request-action@v2.0.0
+        uses: octokit/request-action@bbedc70b1981e610d89f1f8de88311a1fc02fb83 # v2.4.0
         if: github.event_name == 'issue_comment'
         with:
           route: ${{ github.event.issue.pull_request.url }}
@@ -120,7 +120,7 @@ jobs:
           echo ${{ job.status }} > status_build.txt
       - name: Upload file status_build.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_build
           path: status_build.txt
@@ -136,7 +136,7 @@ jobs:
         run: go version
       - name: Install runsim
         run: export GO111MODULE="on" && go install github.com/cosmos/tools/cmd/runsim@v1.0.0
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v4
         with:
           path: ~/go/bin
           key: ${{ runner.os }}-go-runsim-binary
@@ -146,7 +146,7 @@ jobs:
           echo ${{ job.status }} > status_install.txt
       - name: Upload file status_install.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_install
           path: status_install.txt
@@ -183,7 +183,7 @@ jobs:
             go.mod
             go.sum
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v4
         with:
           path: ~/go/bin
           key: ${{ runner.os }}-go-runsim-binary
@@ -202,7 +202,7 @@ jobs:
           echo ${{ job.status }} > status_sim1.txt
       - name: Upload file status_sim1.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_sim1
           path: status_sim1.txt
@@ -239,7 +239,7 @@ jobs:
             go.mod
             go.sum
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v4
         with:
           path: ~/go/bin
           key: ${{ runner.os }}-go-runsim-binary
@@ -258,7 +258,7 @@ jobs:
           echo ${{ job.status }} > status_sim2.txt
       - name: Upload file status_sim2.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_sim2
           path: status_sim2.txt
@@ -295,7 +295,7 @@ jobs:
             go.mod
             go.sum
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v4
         with:
           path: ~/go/bin
           key: ${{ runner.os }}-go-runsim-binary
@@ -314,7 +314,7 @@ jobs:
           echo ${{ job.status }} > status_sim3.txt
       - name: Upload file status_sim3.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_sim3
           path: status_sim3.txt
@@ -351,7 +351,7 @@ jobs:
             go.mod
             go.sum
         if: github.event_name == 'push' || github.event_name == 'pull_request'
-      - uses: actions/cache@v2.1.6
+      - uses: actions/cache@v4
         with:
           path: ~/go/bin
           key: ${{ runner.os }}-go-runsim-binary
@@ -370,7 +370,7 @@ jobs:
           echo ${{ job.status }} > status_sim4.txt
       - name: Upload file status_sim4.txt as an artifact
         if: github.event_name == 'issue_comment'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: pass_status_sim4
           path: status_sim4.txt
@@ -383,32 +383,32 @@ jobs:
     if: always() && github.event_name == 'issue_comment' && needs.member.outputs.valid == 'true'
     steps: 
       - name: Download artifact pass_status_build
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_build
       - name: Download artifact pass_status_install
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_install
       - name: Download artifact pass_status_sim1
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_sim1
       - name: Download artifact pass_status_sim2
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_sim2
       - name: Download artifact pass_status_sim3
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_sim3
       - name: Download artifact pass_status_sim4
-        uses: actions/download-artifact@v1
+        uses: actions/download-artifact@v4.1.7
         continue-on-error: true
         with:
           name: pass_status_sim4

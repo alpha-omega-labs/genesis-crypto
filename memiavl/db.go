@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/alitto/pond"
-	"github.com/cosmos/iavl"
 	"github.com/tidwall/wal"
 )
 
@@ -81,6 +80,9 @@ type DB struct {
 	mtx sync.Mutex
 	// worker goroutine IdleTimeout = 5s
 	snapshotWriterPool *pond.WorkerPool
+
+	// reusable write batch
+	wbatch wal.Batch
 }
 
 type Options struct {
@@ -341,17 +343,24 @@ func (db *DB) ApplyChangeSets(changeSets []*NamedChangeSet) error {
 		return errReadOnly
 	}
 
-	if len(db.pendingLog.Changesets) > 0 {
-		return errors.New("don't support multiple ApplyChangeSets calls in the same version")
+	if len(db.pendingLog.Changesets) == 0 {
+		db.pendingLog.Changesets = changeSets
+		return db.MultiTree.ApplyChangeSets(changeSets)
 	}
-	db.pendingLog.Changesets = changeSets
 
-	return db.MultiTree.ApplyChangeSets(changeSets)
+	// slow path, merge into exist changesets one store at a time,
+	// should not happen in normal state machine life-cycle.
+	for _, cs := range changeSets {
+		if err := db.applyChangeSet(cs.Name, cs.Changeset); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ApplyChangeSet wraps MultiTree.ApplyChangeSet, it also append the changesets in the pending log,
 // which will be persisted to the WAL in next Commit call.
-func (db *DB) ApplyChangeSet(name string, changeSet iavl.ChangeSet) error {
+func (db *DB) ApplyChangeSet(name string, changeSet ChangeSet) error {
 	if len(changeSet.Pairs) == 0 {
 		return nil
 	}
@@ -359,23 +368,36 @@ func (db *DB) ApplyChangeSet(name string, changeSet iavl.ChangeSet) error {
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
+	return db.applyChangeSet(name, changeSet)
+}
+
+func (db *DB) applyChangeSet(name string, changeSet ChangeSet) error {
+	if len(changeSet.Pairs) == 0 {
+		return nil
+	}
+
 	if db.readOnly {
 		return errReadOnly
 	}
 
+	var updated bool
 	for _, cs := range db.pendingLog.Changesets {
 		if cs.Name == name {
-			return errors.New("don't support multiple ApplyChangeSet calls with the same name in the same version")
+			cs.Changeset.Pairs = append(cs.Changeset.Pairs, changeSet.Pairs...)
+			updated = true
+			break
 		}
 	}
 
-	db.pendingLog.Changesets = append(db.pendingLog.Changesets, &NamedChangeSet{
-		Name:      name,
-		Changeset: changeSet,
-	})
-	sort.SliceStable(db.pendingLog.Changesets, func(i, j int) bool {
-		return db.pendingLog.Changesets[i].Name < db.pendingLog.Changesets[j].Name
-	})
+	if !updated {
+		db.pendingLog.Changesets = append(db.pendingLog.Changesets, &NamedChangeSet{
+			Name:      name,
+			Changeset: changeSet,
+		})
+		sort.SliceStable(db.pendingLog.Changesets, func(i, j int) bool {
+			return db.pendingLog.Changesets[i].Name < db.pendingLog.Changesets[j].Name
+		})
+	}
 
 	return db.MultiTree.ApplyChangeSet(name, changeSet)
 }
@@ -421,8 +443,13 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 		db.snapshotRewriteCancel = nil
 
 		if result.mtree == nil {
-			// background snapshot rewrite failed
-			return fmt.Errorf("background snapshot rewriting failed: %w", result.err)
+			if result.err != nil {
+				// background snapshot rewrite failed
+				return fmt.Errorf("background snapshot rewriting failed: %w", result.err)
+			}
+
+			// background snapshot rewrite don't success, but no error to propagate, ignore it.
+			return nil
 		}
 
 		// wait for potential pending wal writings to finish, to make sure we catch up to latest state.
@@ -461,7 +488,7 @@ func (db *DB) checkBackgroundSnapshotRewrite() error {
 	return nil
 }
 
-// pruneSnapshot prune the old snapshots
+// pruneSnapshots prune the old snapshots
 func (db *DB) pruneSnapshots() {
 	// wait until last prune finish
 	db.pruneSnapshotLock.Lock()
@@ -537,11 +564,17 @@ func (db *DB) Commit() (int64, error) {
 			// async wal writing
 			db.walChan <- &entry
 		} else {
-			bz, err := entry.data.Marshal()
+			lastIndex, err := db.wal.LastIndex()
 			if err != nil {
 				return 0, err
 			}
-			if err := db.wal.Write(entry.index, bz); err != nil {
+
+			db.wbatch.Clear()
+			if err := writeEntry(&db.wbatch, db.logger, lastIndex, &entry); err != nil {
+				return 0, err
+			}
+
+			if err := db.wal.WriteBatch(&db.wbatch); err != nil {
 				return 0, err
 			}
 		}
@@ -572,13 +605,17 @@ func (db *DB) initAsyncCommit() {
 				break
 			}
 
+			lastIndex, err := db.wal.LastIndex()
+			if err != nil {
+				walQuit <- err
+				return
+			}
+
 			for _, entry := range entries {
-				bz, err := entry.data.Marshal()
-				if err != nil {
+				if err := writeEntry(&batch, db.logger, lastIndex, entry); err != nil {
 					walQuit <- err
 					return
 				}
-				batch.Write(entry.index, bz)
 			}
 
 			if err := db.wal.WriteBatch(&batch); err != nil {
@@ -680,7 +717,7 @@ func (db *DB) reloadMultiTree(mtree *MultiTree) error {
 
 	db.MultiTree = *mtree
 	// catch-up the pending changes
-	return db.MultiTree.applyWALEntry(db.pendingLog)
+	return db.applyWALEntry(db.pendingLog)
 }
 
 // rewriteIfApplicable execute the snapshot rewrite strategy according to current height
@@ -730,7 +767,8 @@ func (db *DB) rewriteSnapshotBackground() error {
 
 		cloned.logger.Info("start rewriting snapshot", "version", cloned.Version())
 		if err := cloned.RewriteSnapshotWithContext(ctx); err != nil {
-			ch <- snapshotResult{err: err}
+			// write error log but don't stop the client, it could happen when load an old version.
+			cloned.logger.Error("failed to rewrite snapshot", "err", err)
 			return
 		}
 		cloned.logger.Info("finished rewriting snapshot", "version", cloned.Version())
@@ -882,7 +920,7 @@ func parseVersion(name string) (int64, error) {
 
 	v, err := strconv.ParseInt(name[len(SnapshotPrefix):], 10, 32)
 	if err != nil {
-		return 0, fmt.Errorf("snapshot version overflows: %d", err)
+		return 0, fmt.Errorf("snapshot version overflows: %w", err)
 	}
 
 	return v, nil
@@ -1073,4 +1111,18 @@ func channelBatchRecv[T any](ch <-chan *T) []*T {
 	}
 
 	return result
+}
+
+func writeEntry(batch *wal.Batch, logger Logger, lastIndex uint64, entry *walEntry) error {
+	bz, err := entry.data.Marshal()
+	if err != nil {
+		return err
+	}
+
+	if entry.index <= lastIndex {
+		logger.Error("commit old version idempotently", "lastIndex", lastIndex, "version", entry.index)
+	} else {
+		batch.Write(entry.index, bz)
+	}
+	return nil
 }

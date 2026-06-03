@@ -22,8 +22,8 @@ add_line_to_file() {
 # System update and installation of dependencies
 sudo apt-get update -y
 sudo apt-get install jq git wget make gcc build-essential snapd -y
-snap install go --channel=1.22/stable --classic
-snap refresh go --channel=1.22/stable --classic
+snap install go --channel=1.23/stable --classic
+snap refresh go --channel=1.23/stable --classic
 
 # Add GOPATH
 export PATH=$PATH:$(go env GOPATH)/bin

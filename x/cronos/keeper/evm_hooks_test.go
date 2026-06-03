@@ -4,21 +4,18 @@ import (
 	"fmt"
 	"math/big"
 
+	cronosmodulekeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
 	handlers "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper/evmhandlers"
-
-	gravitytypes "github.com/peggyjv/gravity-bridge/module/v2/x/gravity/types"
-
-	"github.com/crypto-org-chain/cronos/v2/app"
 	keepertest "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper/mock"
 	"github.com/crypto-org-chain/cronos/v2/x/cronos/types"
+	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
+
+	sdkmath "cosmossdk.io/math"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
-	cronosmodulekeeper "github.com/crypto-org-chain/cronos/v2/x/cronos/keeper"
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 )
 
 func (suite *KeeperTestSuite) TestEvmHooks() {
@@ -44,7 +41,7 @@ func (suite *KeeperTestSuite) TestEvmHooks() {
 				receipt := &ethtypes.Receipt{
 					Logs: logs,
 				}
-				err := suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
+				err := suite.app.EvmKeeper.PostTxProcessing(suite.ctx, nil, receipt)
 				suite.Require().NoError(err)
 			},
 		},
@@ -66,16 +63,17 @@ func (suite *KeeperTestSuite) TestEvmHooks() {
 				receipt := &ethtypes.Receipt{
 					Logs: logs,
 				}
-				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
+				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, nil, receipt)
 				suite.Require().Error(err)
 			},
 		},
 		{
 			"success send to account",
 			func() {
-				suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
-				coin := sdk.NewCoin(denom, sdk.NewInt(100))
-				err := suite.MintCoins(sdk.AccAddress(contract.Bytes()), sdk.NewCoins(coin))
+				err := suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
+				suite.Require().NoError(err)
+				coin := sdk.NewCoin(denom, sdkmath.NewInt(100))
+				err = suite.MintCoins(contract.Bytes(), sdk.NewCoins(coin))
 				suite.Require().NoError(err)
 
 				balance := suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(contract.Bytes()), denom)
@@ -96,100 +94,13 @@ func (suite *KeeperTestSuite) TestEvmHooks() {
 				receipt := &ethtypes.Receipt{
 					Logs: logs,
 				}
-				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
+				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, nil, receipt)
 				suite.Require().NoError(err)
 
 				balance = suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(contract.Bytes()), denom)
-				suite.Require().Equal(sdk.NewCoin(denom, sdk.NewInt(0)), balance)
+				suite.Require().Equal(sdk.NewCoin(denom, sdkmath.NewInt(0)), balance)
 				balance = suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(recipient.Bytes()), denom)
 				suite.Require().Equal(coin, balance)
-			},
-		},
-		{
-			"failed send to ethereum, invalid gravity denom",
-			func() {
-				suite.SetupTest()
-
-				suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
-				coin := sdk.NewCoin(denom, sdk.NewInt(100))
-				err := suite.MintCoins(sdk.AccAddress(sender.Bytes()), sdk.NewCoins(coin))
-				suite.Require().NoError(err)
-
-				balance := suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(sender.Bytes()), denom)
-				suite.Require().Equal(coin, balance)
-
-				data, err := handlers.SendToEvmChainEvent.Inputs.NonIndexed().Pack(
-					coin.Amount.BigInt(),
-					big.NewInt(0),
-					[]byte{},
-				)
-				suite.Require().NoError(err)
-				logs := []*ethtypes.Log{
-					{
-						Address: contract,
-						Topics: []common.Hash{
-							handlers.SendToEvmChainEvent.ID,
-							sender.Hash(),
-							recipient.Hash(),
-							common.BytesToHash(big.NewInt(1).Bytes()),
-						},
-						Data: data,
-					},
-				}
-				receipt := &ethtypes.Receipt{
-					Logs: logs,
-				}
-				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
-				// should fail, because of not gravity denom name
-				suite.Require().Error(err)
-			},
-		},
-		{
-			"success send to evm chain",
-			func() {
-				suite.SetupTest()
-				denom := denomGravity
-
-				suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
-				coin := sdk.NewCoin(denom, sdk.NewInt(100))
-				err := suite.MintCoins(sdk.AccAddress(contract.Bytes()), sdk.NewCoins(coin))
-				suite.Require().NoError(err)
-
-				balance := suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(contract.Bytes()), denom)
-				suite.Require().Equal(coin, balance)
-
-				data, err := handlers.SendToEvmChainEvent.Inputs.NonIndexed().Pack(
-					coin.Amount.BigInt(),
-					big.NewInt(0),
-					[]byte{},
-				)
-				suite.Require().NoError(err)
-				logs := []*ethtypes.Log{
-					{
-						Address: contract,
-						Topics: []common.Hash{
-							handlers.SendToEvmChainEvent.ID,
-							sender.Hash(),
-							recipient.Hash(),
-							common.BytesToHash(big.NewInt(1).Bytes()),
-						},
-						Data: data,
-					},
-				}
-				receipt := &ethtypes.Receipt{
-					Logs: logs,
-				}
-				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
-				suite.Require().NoError(err)
-
-				// contract's balance deducted
-				balance = suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(contract.Bytes()), denom)
-				suite.Require().Equal(sdk.NewCoin(denom, sdk.NewInt(0)), balance)
-				// query unbatched SendToEthereum message exist
-				rsp, _ := suite.app.GravityKeeper.UnbatchedSendToEthereums(sdk.WrapSDKContext(suite.ctx), &gravitytypes.UnbatchedSendToEthereumsRequest{
-					SenderAddress: sdk.AccAddress(sender.Bytes()).String(),
-				})
-				suite.Require().Equal(1, len(rsp.SendToEthereums))
 			},
 		},
 		{
@@ -198,21 +109,21 @@ func (suite *KeeperTestSuite) TestEvmHooks() {
 				suite.SetupTest()
 				// Create Cronos Keeper with mock transfer keeper
 				cronosKeeper := *cronosmodulekeeper.NewKeeper(
-					app.MakeEncodingConfig().Codec,
+					suite.app.EncodingConfig().Codec,
 					suite.app.GetKey(types.StoreKey),
 					suite.app.GetKey(types.MemStoreKey),
 					suite.app.BankKeeper,
 					keepertest.IbcKeeperMock{},
-					suite.app.GravityKeeper,
 					suite.app.EvmKeeper,
 					suite.app.AccountKeeper,
 					authtypes.NewModuleAddress(govtypes.ModuleName).String(),
 				)
 				suite.app.CronosKeeper = cronosKeeper
 
-				suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
-				coin := sdk.NewCoin(denom, sdk.NewInt(100))
-				err := suite.MintCoins(sdk.AccAddress(contract.Bytes()), sdk.NewCoins(coin))
+				err := suite.app.CronosKeeper.SetExternalContractForDenom(suite.ctx, denom, contract)
+				suite.Require().NoError(err)
+				coin := sdk.NewCoin(denom, sdkmath.NewInt(100))
+				err = suite.MintCoins(contract.Bytes(), sdk.NewCoins(coin))
 				suite.Require().NoError(err)
 
 				balance := suite.app.BankKeeper.GetBalance(suite.ctx, sdk.AccAddress(contract.Bytes()), denom)
@@ -234,7 +145,7 @@ func (suite *KeeperTestSuite) TestEvmHooks() {
 				receipt := &ethtypes.Receipt{
 					Logs: logs,
 				}
-				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, core.Message{}, receipt)
+				err = suite.app.EvmKeeper.PostTxProcessing(suite.ctx, nil, receipt)
 				// should fail, because of not ibc denom name
 				suite.Require().Error(err)
 			},
