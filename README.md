@@ -25,7 +25,7 @@
 Due to the recent on-chain minting of the full Protein Data Bank (PDB), the size of the GenesisL1 blockchain has increased significantly. This data-heavy event resulted in a substantial boost to storage requirements and syncing time. To address this, the GenesisL1 community provides multiple streamlined methods to get a node up and running quickly — including a bootstrapped `data` folder backup that allows syncing within hours instead of several days.
 
 > ⚠️ **IMPORTANT:**
-> In **Step 2**, you will need to choone **one setup methods**: Option A or B.
+> In **Step 2**, you will need to choose **one setup method**: Option **A** or **B**.
 
 This repository is intended for those who want to join the Cronos-fork **mainnet**: `genesis_29-2`, using one of the following paths:
 

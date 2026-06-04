@@ -266,7 +266,7 @@ block-stm-pre-estimate = false
 [json-rpc]
 
 # Enable defines if the gRPC server should be enabled.
-enable = true
+enable = false
 
 # Address defines the EVM RPC HTTP server address to bind to.
 address = "127.0.0.1:8545"
