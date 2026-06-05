@@ -33,10 +33,10 @@ Validator state options:
   -h, --help                   Show this help
 
 Examples:
-  ./local_backup_restore.sh -i /mnt/backup/data_13002000.tar.lz4
-  ./local_backup_restore.sh -i ./data_13002000.tar.lz4 -s -r
-  ./local_backup_restore.sh -i ./data_13002000.tar.lz4 -H /srv/genesis/.genesis -s -d genesisd
-  ./local_backup_restore.sh -i ./data_13002000.tar.lz4 -s -r --no-keep-validator-state
+  ./local_backup_restore.sh -i /mnt/backup/data_12654149.tar.lz4
+  ./local_backup_restore.sh -i ./data_12654149.tar.lz4 -s -r
+  ./local_backup_restore.sh -i ./data_12654149.tar.lz4 -H /srv/genesis/.genesis -s -d genesisd
+  ./local_backup_restore.sh -i ./data_12654149.tar.lz4 -s -r --no-keep-validator-state
 EOF
 }
 
@@ -47,10 +47,12 @@ DO_STOP_START=0
 REMOVE_EXISTING=0
 DRY_RUN=0
 KEEP_VALIDATOR_STATE=1
+SYSTEMCTL=(systemctl)
 
 require_value() {
   local flag="$1"
   local value="${2:-}"
+
   if [[ -z "$value" ]]; then
     echo "ERROR: ${flag} requires a value" >&2
     usage
@@ -68,6 +70,43 @@ run() {
   else
     "$@"
   fi
+}
+
+prepare_systemctl() {
+  if [[ "$DO_STOP_START" -eq 0 ]]; then
+    return 0
+  fi
+
+  command -v systemctl >/dev/null 2>&1 || {
+    echo "ERROR: systemctl not found in PATH" >&2
+    exit 127
+  }
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    SYSTEMCTL=(systemctl)
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    SYSTEMCTL=(sudo systemctl)
+
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+      echo "==> sudo is required to manage ${DAEMON}.service"
+
+      if ! sudo -v; then
+        echo "ERROR: sudo authentication failed or was cancelled." >&2
+        exit 1
+      fi
+
+      echo
+    fi
+
+    return 0
+  fi
+
+  echo "ERROR: stopping/starting ${DAEMON}.service requires root privileges." >&2
+  echo "       Install sudo, run systemctl manually, or run without -s." >&2
+  exit 1
 }
 
 # --- args ---
@@ -142,13 +181,6 @@ command -v tar >/dev/null 2>&1 || {
   exit 127
 }
 
-if [[ "$DO_STOP_START" -eq 1 ]]; then
-  command -v systemctl >/dev/null 2>&1 || {
-    echo "ERROR: systemctl not found in PATH" >&2
-    exit 127
-  }
-fi
-
 PVS="${HOME_DIR}/data/priv_validator_state.json"
 PVS_BACKUP=""
 
@@ -161,16 +193,19 @@ echo "    rm data/              : ${REMOVE_EXISTING}"
 echo "    keep validator state  : ${KEEP_VALIDATOR_STATE}"
 echo
 
+prepare_systemctl
+
 run mkdir -p "$HOME_DIR"
 
 if [[ "$DO_STOP_START" -eq 1 ]]; then
-  run systemctl stop "$DAEMON"
+  run "${SYSTEMCTL[@]}" stop "$DAEMON"
 fi
 
 # Preserve validator signing state before wiping/extracting.
 if [[ "$KEEP_VALIDATOR_STATE" -eq 1 ]]; then
   if [[ -f "$PVS" ]]; then
     PVS_BACKUP="${HOME_DIR}/priv_validator_state.$(date -u +%Y%m%dT%H%M%SZ).bak.json"
+
     echo "==> Preserving validator signing state"
     echo "    from: ${PVS}"
     echo "    to  : ${PVS_BACKUP}"
@@ -195,21 +230,25 @@ fi
 # Sanity check without grep/head SIGPIPE causing a false warning under pipefail.
 if [[ "$DRY_RUN" -eq 0 ]]; then
   echo "==> Checking archive contains top-level 'data/' ..."
+
   listing="$(lz4 -dc "$INPUT" 2>/dev/null | tar -tf - 2>/dev/null | head -n 50 || true)"
 
   if ! grep -qE '^data/' <<<"$listing"; then
     echo "WARNING: Could not confirm 'data/' at archive root from the first entries." >&2
     echo "         If your tar stores 'data/' later, this warning can be ignored." >&2
   fi
+
   echo
 fi
 
 echo "==> Extracting into ${HOME_DIR} ..."
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[dry-run] lz4 -dc $(printf '%q' "$INPUT") | tar -xvf - -C $(printf '%q' "$HOME_DIR")"
 else
   lz4 -dc "$INPUT" | tar -xvf - -C "$HOME_DIR"
 fi
+
 echo
 
 # Restore preserved validator signing state after snapshot extraction.
@@ -221,7 +260,7 @@ if [[ "$KEEP_VALIDATOR_STATE" -eq 1 && -n "$PVS_BACKUP" ]]; then
 fi
 
 if [[ "$DO_STOP_START" -eq 1 ]]; then
-  run systemctl start "$DAEMON"
+  run "${SYSTEMCTL[@]}" start "$DAEMON"
 fi
 
 echo "==> Done."
